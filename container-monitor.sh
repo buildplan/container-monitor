@@ -745,221 +745,212 @@ perform_checks_for_container() {
 }
 
 # --- Main Execution ---
-declare -a CONTAINERS_TO_CHECK=()
-declare -a WARNING_OR_ERROR_CONTAINERS=()
-declare -A CONTAINER_ISSUES_MAP
 
-# --- Argument & Mode Parsing ---
+main() {
+    # Re-enable local variables, as we are now inside a function
+    declare -a CONTAINERS_TO_CHECK=()
+    declare -a WARNING_OR_ERROR_CONTAINERS=()
+    declare -A CONTAINER_ISSUES_MAP
 
-declare -a CONTAINERS_TO_EXCLUDE=()
-declare -a new_args=()
-# Process arguments, separating the --exclude flag from the rest
-for arg in "$@"; do
-    case "$arg" in
-        --exclude=*)
-            EXCLUDE_STR="${arg#*=}"
-            IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
-            ;;
-        *)
-            new_args+=("$arg")
-            ;;
-    esac
-done
-set -- "${new_args[@]}"
-
-run_update_check=true
-if [ "$1" == "--no-update" ]; then run_update_check=false; shift; fi
-
-if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
-    latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
-    if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then self_update; fi
-fi
-
-INTERACTIVE_UPDATE_MODE=false
-if [ "$1" == "--interactive-update" ]; then
-    INTERACTIVE_UPDATE_MODE=true
-    shift
-fi
-
-if [ "$#" -gt 0 ] && [ "$1" = "summary" ]; then SUMMARY_ONLY_MODE=true; shift; fi
-
-if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-    if [ "$#" -gt 0 ]; then
-        case "$1" in
-        logs)
-          shift # Remove "logs" from arguments
-          container_to_log="${1:-all}"
-          filter_type="${2:-all}" # Check for an "errors" filter
-
-          if [ "$container_to_log" = "all" ]; then
-              echo "Please specify a container name to view its logs."
-              exit 1
-          fi
-          #...
-          ;;
-        save)
-          shift # Remove "save" from arguments
-          if [ "$1" = "logs" ] && [ -n "$2" ]; then
-            container_to_save="$2"
-            save_logs "$container_to_save"
-          else
-            echo "Usage: $0 save logs <container_name>"
-          fi
-          exit 0
-          ;;
-        *)
-          CONTAINERS_TO_CHECK=("$@")
-          ;;
-      esac
-    fi
-fi
-
-# --- Determine Containers to Monitor ---
-if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
-    if [ -n "$CONTAINER_NAMES" ]; then
-        IFS=',' read -r -a temp_env_names <<< "$CONTAINER_NAMES"
-        for name_from_env in "${temp_env_names[@]}"; do
-            name_trimmed="${name_from_env#"${name_from_env%%[![:space:]]*}"}"; name_trimmed="${name_trimmed%"${name_trimmed##*[![:space:]]}"}"
-            if [ -n "$name_trimmed" ]; then CONTAINERS_TO_CHECK+=("$name_trimmed"); fi
-        done
-    elif [ ${#CONTAINER_NAMES_FROM_CONFIG_FILE[@]} -gt 0 ]; then
-        CONTAINERS_TO_CHECK=("${CONTAINER_NAMES_FROM_CONFIG_FILE[@]}")
-    else
-        mapfile -t all_running_names < <(docker container ls --format '{{.Names}}' 2>/dev/null)
-        if [ ${#all_running_names[@]} -gt 0 ]; then CONTAINERS_TO_CHECK=("${all_running_names[@]}"); fi
-    fi
-fi
-
-# Filter out excluded containers if the exclude list has items
-if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
-    declare -a temp_containers_to_check=()
-    for container in "${CONTAINERS_TO_CHECK[@]}"; do
-        is_excluded=false
-        for excluded in "${CONTAINERS_TO_EXCLUDE[@]}"; do
-            if [[ "$container" == "$excluded" ]]; then
-                is_excluded=true
-                break
-            fi
-        done
-        if [ "$is_excluded" = false ]; then
-            temp_containers_to_check+=("$container")
-        fi
+    # --- Argument & Mode Parsing ---
+    declare -a CONTAINERS_TO_EXCLUDE=()
+    declare -a new_args=()
+    for arg in "$@"; do
+        case "$arg" in
+            --exclude=*)
+                local EXCLUDE_STR="${arg#*=}"
+                IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+                ;;
+            *)
+                new_args+=("$arg")
+                ;;
+        esac
     done
-    # Replace the original array with the filtered one
-    CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
-fi
+    set -- "${new_args[@]}"
 
-# --- Run Monitoring ---
-if [ "$INTERACTIVE_UPDATE_MODE" = "true" ]; then
-    run_interactive_update_mode
-    exit 0
-fi
+    local run_update_check=true
+    if [[ "$1" == "--no-update" ]]; then run_update_check=false; shift; fi
 
-if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
-    results_dir=$(mktemp -d)
-    export -f perform_checks_for_container print_message check_container_status check_container_restarts \
-               check_resource_usage check_disk_space check_network check_for_updates check_logs
-    export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
-           LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD NETWORK_ERROR_THRESHOLD
-
-    if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-        echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
-        start_time=$(date +%s)
-        mkfifo progress_pipe
-        (
-            # Define spinner characters
-	    spinner_chars=("|" "/" "-" '\')
-            spinner_idx=0
-            processed=0
-            total=${#CONTAINERS_TO_CHECK[@]}
-
-            # Read from the pipe to update the progress
-            while read -r; do
-                processed=$((processed + 1))
-
-                # --- Calculations for display ---
-                percent=$((processed * 100 / total))
-                bar_len=40
-                bar_filled_len=$((processed * bar_len / total))
-
-                # --- Elapsed time calculation ---
-                current_time=$(date +%s)
-                elapsed=$((current_time - start_time))
-                elapsed_str=$(printf "%02d:%02d" $((elapsed/60)) $((elapsed%60)))
-
-                # --- Spinner character ---
-                spinner_char=${spinner_chars[spinner_idx]}
-                spinner_idx=$(((spinner_idx + 1) % 4))
-
-                # --- Build the bar strings ---
-		bar_filled=""
-		for ((j=0; j<bar_filled_len; j++)); do bar_filled+="█"; done
-		bar_empty=""
-		for ((j=0; j< (bar_len - bar_filled_len) ; j++)); do bar_empty+="░"; done
-
-                # --- Print the full progress line ---
-                printf "\r${COLOR_GREEN}Progress: [%s%s] %3d%% (%d/%d) | Elapsed: %s [${spinner_char}]${COLOR_RESET}" \
-                       "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
-
-             done < progress_pipe
-
-            # Print a final newline to clean up
-            echo
-        ) &
-        progress_pid=$!
-        exec 3> progress_pipe
+    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
+        local latest_version
+        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then self_update; fi
     fi
 
-    printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
+    if [[ "$1" == "--interactive-update" ]]; then
+        run_interactive_update_mode
+        return 0 # Exit the main function
+    fi
+
+    if [[ "$#" -gt 0 && "$1" == "summary" ]]; then SUMMARY_ONLY_MODE=true; shift; fi
 
     if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-        exec 3>&-
-        wait "$progress_pid"
-        rm progress_pipe
-        echo
-        print_message "${COLOR_BLUE}---------------------- Docker Container Monitoring Results ----------------------${COLOR_RESET}" "INFO"
+        if [ "$#" -gt 0 ]; then
+          case "$1" in
+            logs)
+              shift
+              local container_to_log="${1:-all}"
+              local filter_type="${2:-all}"
+
+              if [[ "$container_to_log" == "all" ]]; then
+                  echo "Please specify a container name to view its logs."
+                  return 1 # Exit the main function
+              fi
+
+              if [[ "$filter_type" == "errors" ]]; then
+                  echo "--- Showing errors for $container_to_log ---"
+                  docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
+              else
+                  echo "--- Showing logs for $container_to_log ---"
+                  docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+              fi
+              return 0 # Exit the main function
+              ;;
+            save)
+              shift
+              if [[ "$1" == "logs" && -n "$2" ]]; then
+                local container_to_save="$2"
+                save_logs "$container_to_save"
+              else
+                echo "Usage: $0 save logs <container_name>"
+              fi
+              return 0 # Exit the main function
+              ;;
+            *)
+              CONTAINERS_TO_CHECK=("$@")
+              ;;
+          esac
+        fi
+    fi
+    # If in summary mode, remaining args are containers
+    if [ "$SUMMARY_ONLY_MODE" = "true" ] && [ "$#" -gt 0 ]; then
+        CONTAINERS_TO_CHECK=("$@")
+    fi
+
+    # --- Determine Containers to Monitor ---
+    if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
+        if [ -n "$CONTAINER_NAMES" ]; then
+            IFS=',' read -r -a temp_env_names <<< "$CONTAINER_NAMES"
+            for name_from_env in "${temp_env_names[@]}"; do
+                local name_trimmed="${name_from_env#"${name_from_env%%[![:space:]]*}"}"; name_trimmed="${name_trimmed%"${name_trimmed##*[![:space:]]}"}"
+                if [ -n "$name_trimmed" ]; then CONTAINERS_TO_CHECK+=("$name_trimmed"); fi
+            done
+        elif [ ${#CONTAINER_NAMES_FROM_CONFIG_FILE[@]} -gt 0 ]; then
+            CONTAINERS_TO_CHECK=("${CONTAINER_NAMES_FROM_CONFIG_FILE[@]}")
+        else
+            mapfile -t all_running_names < <(docker container ls --format '{{.Names}}' 2>/dev/null)
+            if [ ${#all_running_names[@]} -gt 0 ]; then CONTAINERS_TO_CHECK=("${all_running_names[@]}"); fi
+        fi
+    fi
+
+    # Filter out excluded containers
+    if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
+        local temp_containers_to_check=()
         for container in "${CONTAINERS_TO_CHECK[@]}"; do
-            if [ -f "$results_dir/$container.log" ]; then
-                cat "$results_dir/$container.log"; echo "-------------------------------------------------------------------------"
+            local is_excluded=false
+            for excluded in "${CONTAINERS_TO_EXCLUDE[@]}"; do
+                if [[ "$container" == "$excluded" ]]; then
+                    is_excluded=true
+                    break
+                fi
+            done
+            if [ "$is_excluded" = false ]; then
+                temp_containers_to_check+=("$container")
             fi
         done
+        CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
     fi
 
-    for issue_file in "$results_dir"/*.issues; do
-        if [ -f "$issue_file" ]; then
-            container_name=$(basename "$issue_file" .issues)
-            issues=$(cat "$issue_file")
-            WARNING_OR_ERROR_CONTAINERS+=("$container_name")
-            CONTAINER_ISSUES_MAP["$container_name"]="$issues"
+    # --- Run Monitoring ---
+    if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
+        local results_dir
+        results_dir=$(mktemp -d)
+        export -f perform_checks_for_container print_message check_container_status check_container_restarts \
+                   check_resource_usage check_disk_space check_network check_for_updates check_logs
+        export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
+               LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD NETWORK_ERROR_THRESHOLD
+
+        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
+            echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
+            local start_time; start_time=$(date +%s)
+            mkfifo progress_pipe
+            (
+                local spinner_chars=("|" "/" "-" '\')
+                local spinner_idx=0
+                local processed=0
+                local total=${#CONTAINERS_TO_CHECK[@]}
+                while read -r; do
+                    processed=$((processed + 1))
+                    local percent=$((processed * 100 / total))
+                    local bar_len=40
+                    local bar_filled_len=$((processed * bar_len / total))
+                    local current_time; current_time=$(date +%s)
+                    local elapsed=$((current_time - start_time))
+                    local elapsed_str; elapsed_str=$(printf "%02d:%02d" $((elapsed/60)) $((elapsed%60)))
+                    local spinner_char=${spinner_chars[spinner_idx]}
+                    spinner_idx=$(((spinner_idx + 1) % 4))
+                    local bar_filled=""
+                    for ((j=0; j<bar_filled_len; j++)); do bar_filled+="█"; done
+                    local bar_empty=""
+                    for ((j=0; j< (bar_len - bar_filled_len) ; j++)); do bar_empty+="░"; done
+                    printf "\r${COLOR_GREEN}Progress: [%s%s] %3d%% (%d/%d) | Elapsed: %s [${spinner_char}]${COLOR_RESET}" \
+                           "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
+                 done < progress_pipe
+                echo
+            ) &
+            local progress_pid=$!
+            exec 3> progress_pipe
         fi
-    done
 
-    # This will show the summary of issues found asynchronously
-    print_summary
+        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
 
-    if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
-        summary_message=""
-        for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-            issues=${CONTAINER_ISSUES_MAP["$container"]}
-            summary_message+="\n- **$container**: $issues"
+        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
+            exec 3>&-
+            wait "$progress_pid"
+            rm progress_pipe
+            echo
+            print_message "${COLOR_BLUE}---------------------- Docker Container Monitoring Results ----------------------${COLOR_RESET}" "INFO"
+            for container in "${CONTAINERS_TO_CHECK[@]}"; do
+                if [ -f "$results_dir/$container.log" ]; then
+                    cat "$results_dir/$container.log"; echo "-------------------------------------------------------------------------"
+                fi
+            done
+        fi
+
+        for issue_file in "$results_dir"/*.issues; do
+            if [ -f "$issue_file" ]; then
+                local container_name; container_name=$(basename "$issue_file" .issues)
+                local issues; issues=$(cat "$issue_file")
+                WARNING_OR_ERROR_CONTAINERS+=("$container_name")
+                CONTAINER_ISSUES_MAP["$container_name"]="$issues"
+            fi
         done
-        summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
-        send_notification "$summary_message" "🚨 Docker Monitoring Alert"
+
+        print_summary
+
+        if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+            local summary_message=""
+            for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+                local issues=${CONTAINER_ISSUES_MAP["$container"]}
+                summary_message+="\n- **$container**: $issues"
+            done
+            summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
+            send_notification "$summary_message" "🚨 Docker Monitoring Alert"
+        fi
+
+        rm -rf "$results_dir"
     fi
 
-    rm -rf "$results_dir"
-fi
+    PRINT_MESSAGE_FORCE_STDOUT=true
+    if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
+        print_message "Summary generation completed." "SUMMARY"
+    elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
+        print_message "No containers specified or found running to monitor." "INFO"
+        print_summary
+    else
+        print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
+    fi
+}
 
-# --- Final Message ---
-PRINT_MESSAGE_FORCE_STDOUT=true
-if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
-    # The summary is already printed, just confirm completion
-    print_message "Summary generation completed." "SUMMARY"
-elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
-    print_message "No containers specified or found running to monitor." "INFO"
-    print_summary # Show host stats even if no containers monitored
-else
-    print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
-fi
-
-exit 0
+# --- executes the script ---
+main "$@"
