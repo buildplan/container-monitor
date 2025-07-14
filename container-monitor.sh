@@ -42,8 +42,9 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.4"
+VERSION="v0.5"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
+CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
 # --- ANSI Color Codes ---
 COLOR_RESET="\033[0m"
@@ -249,26 +250,65 @@ send_notification() {
 self_update() {
     echo "A new version of this script is available. Would you like to update now? (y/n)"
     read -r response
-    if [[ "$response" =~ ^[yY]$ ]]; then
-        local temp_file
-        temp_file=$(mktemp)
-        if curl -sL "$SCRIPT_URL" -o "$temp_file"; then
-            if bash -n "$temp_file"; then
-                mv "$temp_file" "$0"
-                chmod +x "$0"
-                echo "Update successful. Please run the script again."
-                exit 0
-            else
-                echo "Downloaded file is not a valid script. Update aborted."
-                rm -f "$temp_file"
-                exit 1
-            fi
-        else
-            echo "Failed to download the update."
-            rm -f "$temp_file"
-            exit 1
-        fi
+    if [[ ! "$response" =~ ^[yY]$ ]]; then
+        return
     fi
+
+    # Create a temporary directory to ensure a clean working area
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    if [ ! -d "$temp_dir" ]; then
+        print_message "Failed to create temporary directory. Update aborted." "DANGER"
+        exit 1
+    fi
+
+    # Set a trap to automatically clean up the temporary directory on script exit
+    trap 'rm -rf -- "$temp_dir"' EXIT
+
+    local temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
+    local temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
+
+    print_message "Downloading new script version..." "INFO"
+    if ! curl -sL "$SCRIPT_URL" -o "$temp_script"; then
+        print_message "Failed to download the new script. Update aborted." "DANGER"
+        exit 1
+    fi
+
+    print_message "Downloading checksum..." "INFO"
+    if ! curl -sL "$CHECKSUM_URL" -o "$temp_checksum"; then
+        print_message "Failed to download the checksum file. Update aborted." "DANGER"
+        exit 1
+    fi
+
+    print_message "Verifying checksum..." "INFO"
+    # The sha256sum command must be run from the directory containing the files
+    (cd "$temp_dir" && sha256sum -c "$(basename "$CHECKSUM_URL")" --quiet)
+    if [ $? -ne 0 ]; then
+        print_message "Checksum verification failed! The downloaded file may be corrupt. Update aborted." "DANGER"
+        exit 1
+    fi
+    print_message "Checksum verified successfully." "GOOD"
+
+    print_message "Checking script syntax..." "INFO"
+    if ! bash -n "$temp_script"; then
+        print_message "Downloaded file is not a valid script. Update aborted." "DANGER"
+        exit 1
+    fi
+    print_message "Syntax check passed." "GOOD"
+
+    # If all checks pass, move the new script into place
+    if ! mv "$temp_script" "$0"; then
+        print_message "Failed to replace the old script file. Update aborted." "DANGER"
+        exit 1
+    fi
+    chmod +x "$0"
+
+    # Clean up the trap and temporary files before exiting
+    trap - EXIT
+    rm -rf -- "$temp_dir"
+
+    print_message "Update successful. Please run the script again." "GOOD"
+    exit 0
 }
 
 check_container_status() {
@@ -625,16 +665,39 @@ if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
     if [ "$#" -gt 0 ]; then
       case "$1" in
         logs)
-          # Logic for logs and save commands
-          exit 0 ;;
+          shift # Remove "logs" from arguments
+          local container_to_log="${1:-all}"
+          local filter_type="${2:-all}" # Check for an "errors" filter
+
+          if [ "$container_to_log" = "all" ]; then
+              echo "Please specify a container name to view its logs."
+              exit 1
+          fi
+
+          if [ "$filter_type" = "errors" ]; then
+              echo "--- Showing errors for $container_to_log ---"
+              docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
+          else
+              echo "--- Showing logs for $container_to_log ---"
+              docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+          fi
+          exit 0
+          ;;
         save)
-          # Logic for logs and save commands
-          exit 0 ;;
-        *) CONTAINERS_TO_CHECK=("$@") ;;
+          shift # Remove "save" from arguments
+          if [ "$1" = "logs" ] && [ -n "$2" ]; then
+            local container_to_save="$2"
+            save_logs "$container_to_save"
+          else
+            echo "Usage: $0 save logs <container_name>"
+          fi
+          exit 0
+          ;;
+        *)
+          CONTAINERS_TO_CHECK=("$@")
+          ;;
       esac
     fi
-elif [ "$#" -gt 0 ]; then
-    CONTAINERS_TO_CHECK=("$@")
 fi
 
 # --- Determine Containers to Monitor ---
