@@ -10,10 +10,13 @@ A comprehensive Bash script to monitor Docker containers. It checks container he
   - **Release Note Integration**: Displays a direct link to release notes when an update is available, making it easy to see what's new.
   - **Container Health**: Checks running status, health checks (`healthy`/`unhealthy`), and restart counts.
   - **Resource Monitoring**: Monitors CPU and Memory usage against configurable thresholds.
+  - **Disk Usage**: Checks disk space usage for container volumes and bind mounts.
+  - **Network Health**: Checks for network errors and packet drops on container interfaces.
   - **Log Scanning**: Scans recent container logs for keywords like `error`, `panic`, and `fatal`.
   - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
   - **Flexible Notifications**: Sends alerts for any detected issues to **Discord** or a self-hosted **ntfy** server.
   - **Informative Progress Bar**: Displays a fancy, color-coded progress bar showing the percentage complete, elapsed time, and a spinner during interactive runs.
+  - **Summary Report**: Provides a final summary with host-level stats and a list of containers with issues, categorized with emojis for quick identification.
 
 -----
 
@@ -207,6 +210,10 @@ sudo systemctl enable --now docker-monitor.timer
 [WARNING] - beszel-agent 📜 (Issues: Logs)
 [SUMMARY] ------------------------------------------------------------------------
 ```
+
+### 📝 Logging
+
+All script output, including detailed checks, is logged to the file specified by `LOG_FILE` (default: `docker-monitor.log` in the script's directory). For long-term use, consider using `logrotate` to manage the log file size.
 
 ### 🔧 Troubleshooting
 
