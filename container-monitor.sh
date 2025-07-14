@@ -42,7 +42,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.5"
+VERSION="v0.6"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -651,6 +651,23 @@ declare -a WARNING_OR_ERROR_CONTAINERS=()
 declare -A CONTAINER_ISSUES_MAP
 
 # --- Argument & Mode Parsing ---
+
+declare -a CONTAINERS_TO_EXCLUDE=()
+# Check for an exclude argument
+for i in "$@"; do
+    case "$i" in
+        --exclude=*)
+        # Extract the comma-separated string
+        EXCLUDE_STR="${i#*=}"
+        # Convert comma-separated string to an array
+        IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+        # Remove the --exclude argument from the script's arguments
+        set -- "${@//--exclude=$EXCLUDE_STR/}"
+        break # Assume only one --exclude flag
+        ;;
+    esac
+done
+
 run_update_check=true
 if [ "$1" == "--no-update" ]; then run_update_check=false; shift; fi
 
@@ -714,6 +731,25 @@ if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
         mapfile -t all_running_names < <(docker container ls --format '{{.Names}}' 2>/dev/null)
         if [ ${#all_running_names[@]} -gt 0 ]; then CONTAINERS_TO_CHECK=("${all_running_names[@]}"); fi
     fi
+fi
+
+# Filter out excluded containers if the exclude list has items
+if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
+    declare -a temp_containers_to_check=()
+    for container in "${CONTAINERS_TO_CHECK[@]}"; do
+        is_excluded=false
+        for excluded in "${CONTAINERS_TO_EXCLUDE[@]}"; do
+            if [[ "$container" == "$excluded" ]]; then
+                is_excluded=true
+                break
+            fi
+        done
+        if [ "$is_excluded" = false ]; then
+            temp_containers_to_check+=("$container")
+        fi
+    done
+    # Replace the original array with the filtered one
+    CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
 fi
 
 # --- Run Monitoring ---
