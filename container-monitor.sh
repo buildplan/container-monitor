@@ -58,6 +58,7 @@ COLOR_BLUE="\033[0;34m"
 # --- Global Flags ---
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
+INTERACTIVE_UPDATE_MODE=false
 
 # --- Script Default Configuration Values ---
 _SCRIPT_DEFAULT_LOG_LINES_TO_CHECK=20
@@ -576,6 +577,89 @@ check_host_memory_usage() { # Echos output, does not call print_message directly
     echo "$output_string"
 }
 
+pull_new_image() {
+    local container_name_to_update="$1"
+    print_message "Getting image details for '$container_name_to_update'..." "INFO"
+
+    local current_image_ref
+    current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
+    if [ -z "$current_image_ref" ]; then
+        print_message "Could not find image for '$container_name_to_update'. Aborting update." "DANGER"
+        return 1
+    fi
+
+    print_message "Pulling new image for: $current_image_ref" "INFO"
+    if docker pull "$current_image_ref"; then
+        print_message "Successfully pulled new image for '$container_name_to_update'." "GOOD"
+        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} You now need to manually recreate the container (e.g., using 'docker-compose up -d' or your management tool) to apply the update." "WARNING"
+    else
+        print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
+    fi
+}
+
+run_interactive_update_mode() {
+    print_message "Starting interactive update check..." "INFO"
+
+    local containers_with_updates=()
+    local container_update_details=() # Array to store the detailed message
+
+    # 1. Find all running containers
+    mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
+    if [ ${#all_containers[@]} -eq 0 ]; then
+        print_message "No running containers found to check." "INFO"
+        return
+    fi
+    print_message "Checking ${#all_containers[@]} containers for available updates..." "NONE"
+
+    # 2. Check each container for updates
+    for container in "${all_containers[@]}"; do
+        local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
+        local update_details; update_details=$(check_for_updates "$container" "$current_image")
+        if [ $? -ne 0 ]; then
+            containers_with_updates+=("$container")
+            container_update_details+=("$update_details")
+        fi
+    done
+
+    # 3. If no updates, exit
+    if [ ${#containers_with_updates[@]} -eq 0 ]; then
+        print_message "All containers are up-to-date. Nothing to do. ✅" "GOOD"
+        return
+    fi
+
+    # 4. If updates are found, present the menu
+    print_message "The following containers have updates available:" "INFO"
+    for i in "${!containers_with_updates[@]}"; do
+        echo -e "  ${COLOR_CYAN}[$((i + 1))]${COLOR_RESET} ${containers_with_updates[i]} (${COLOR_YELLOW}${container_update_details[i]}${COLOR_RESET})"
+    done
+    echo ""
+
+    # 5. Get user input
+    read -rp "Enter the number(s) of the containers to update (e.g., '1' or '1,3'), or 'all', or press Enter to cancel: " choice
+    if [ -z "$choice" ]; then
+        print_message "Update cancelled by user." "INFO"
+        return
+    fi
+
+    # 6. Process the choice and pull images
+    if [ "$choice" == "all" ]; then
+        for container_to_update in "${containers_with_updates[@]}"; do
+            pull_new_image "$container_to_update"
+        done
+    else
+        IFS=',' read -r -a selections <<< "$choice"
+        for sel in "${selections[@]}"; do
+            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+                pull_new_image "${containers_with_updates[$((sel - 1))]}"
+            else
+                print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+            fi
+        done
+    fi
+
+    print_message "Interactive update process finished." "INFO"
+}
+
 print_summary() { # Uses print_message with FORCE_STDOUT
   local container_name_summary issues issue_emoji
   local printed_containers=()
@@ -689,6 +773,12 @@ if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"
     if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then self_update; fi
 fi
 
+INTERACTIVE_UPDATE_MODE=false
+if [ "$1" == "--interactive-update" ]; then
+    INTERACTIVE_UPDATE_MODE=true
+    shift
+fi
+
 if [ "$#" -gt 0 ] && [ "$1" = "summary" ]; then SUMMARY_ONLY_MODE=true; shift; fi
 
 if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
@@ -766,6 +856,11 @@ if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
 fi
 
 # --- Run Monitoring ---
+if [ "$INTERACTIVE_UPDATE_MODE" = "true" ]; then
+    run_interactive_update_mode
+    exit 0
+fi
+
 if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
     results_dir=$(mktemp -d)
     export -f perform_checks_for_container print_message check_container_status check_container_restarts \
