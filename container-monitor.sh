@@ -752,20 +752,20 @@ declare -A CONTAINER_ISSUES_MAP
 # --- Argument & Mode Parsing ---
 
 declare -a CONTAINERS_TO_EXCLUDE=()
-# Check for an exclude argument
-for i in "$@"; do
-    case "$i" in
+declare -a new_args=()
+# Process arguments, separating the --exclude flag from the rest
+for arg in "$@"; do
+    case "$arg" in
         --exclude=*)
-        # Extract the comma-separated string
-        EXCLUDE_STR="${i#*=}"
-        # Convert comma-separated string to an array
-        IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
-        # Remove the --exclude argument from the script's arguments
-        set -- "${@//--exclude=$EXCLUDE_STR/}"
-        break # Assume only one --exclude flag
-        ;;
+            EXCLUDE_STR="${arg#*=}"
+            IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+            ;;
+        *)
+            new_args+=("$arg")
+            ;;
     esac
 done
+set -- "${new_args[@]}"
 
 run_update_check=true
 if [ "$1" == "--no-update" ]; then run_update_check=false; shift; fi
