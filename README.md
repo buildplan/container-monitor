@@ -77,9 +77,12 @@ Generate the hash of your downloaded script (`sha256sum container-monitor.sh`) a
 chmod +x container-monitor.sh
 ```
 
-#### 4\. Customize `config.sh`
+#### 4\. Customize Configuration Files
 
-Open `config.sh` with a text editor (`nano config.sh`) to set your monitoring defaults.
+Open `config.sh` and `release_urls.conf` with a text editor to set your monitoring defaults and release note links.
+
+  - **`config.sh`**: For main script settings like thresholds and notification channels.
+  - **`release_urls.conf`**: To map container images to their release notes page. The format is `image_name=url`.
 
 #### 5\. (Optional) Add Release Note URLs
 
