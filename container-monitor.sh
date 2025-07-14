@@ -785,30 +785,22 @@ if [ "$#" -gt 0 ] && [ "$1" = "summary" ]; then SUMMARY_ONLY_MODE=true; shift; f
 
 if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
     if [ "$#" -gt 0 ]; then
-      case "$1" in
+        case "$1" in
         logs)
           shift # Remove "logs" from arguments
-          local container_to_log="${1:-all}"
-          local filter_type="${2:-all}" # Check for an "errors" filter
+          container_to_log="${1:-all}"
+          filter_type="${2:-all}" # Check for an "errors" filter
 
           if [ "$container_to_log" = "all" ]; then
               echo "Please specify a container name to view its logs."
               exit 1
           fi
-
-          if [ "$filter_type" = "errors" ]; then
-              echo "--- Showing errors for $container_to_log ---"
-              docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
-          else
-              echo "--- Showing logs for $container_to_log ---"
-              docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
-          fi
-          exit 0
+          #...
           ;;
         save)
           shift # Remove "save" from arguments
           if [ "$1" = "logs" ] && [ -n "$2" ]; then
-            local container_to_save="$2"
+            container_to_save="$2"
             save_logs "$container_to_save"
           else
             echo "Usage: $0 save logs <container_name>"
