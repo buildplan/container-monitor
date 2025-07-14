@@ -43,7 +43,6 @@
 
 # --- Script & Update Configuration ---
 VERSION="v0.4"
-# !!! IMPORTANT !!!
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 
 # --- ANSI Color Codes ---
