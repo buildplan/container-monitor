@@ -69,6 +69,7 @@ sha256sum -c container-monitor.sh.sha256
 ```
 
 **Option B: Manual Check**
+
 Generate the hash of your downloaded script (`sha256sum container-monitor.sh`) and compare it to the official hash provided in the repository.
 
 #### 3\. Make it Executable
