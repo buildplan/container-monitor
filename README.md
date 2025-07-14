@@ -49,11 +49,16 @@ wget https://github.com/buildplan/container-monitor/raw/main/container-monitor.s
 
 # Download the template config file
 wget https://github.com/buildplan/container-monitor/raw/main/config.sh
+
+# Download example release_urls.conf - populate this with repo relese notes URLs
+wget https://github.com/buildplan/container-monitor/raw/main/release_urls.conf
 ```
 
 #### 2\. Verify Script Integrity (Recommended)
 
 To ensure the script has not been altered, you can verify its SHA256 checksum.
+
+**Option A: Automatic Check**
 
 ```bash
 # Download the official checksum file
@@ -62,6 +67,9 @@ wget https://github.com/buildplan/container-monitor/raw/main/container-monitor.s
 # Run the check (it should output: container-monitor.sh: OK)
 sha256sum -c container-monitor.sh.sha256
 ```
+
+**Option B: Manual Check**
+Generate the hash of your downloaded script (`sha256sum container-monitor.sh`) and compare it to the official hash provided in the repository.
 
 #### 3\. Make it Executable
 
@@ -108,6 +116,16 @@ The script is configured by editing `config.sh` or by setting environment variab
 | `NTFY_ACCESS_TOKEN` | `NTFY_ACCESS_TOKEN_DEFAULT` | (empty) | Access token for private ntfy topics. |
 
   - **Note**: You can list Docker container names with `docker ps -a --format '{{.Names}}'`. Then, edit `config.sh` to add the names of the containers you want to monitor by default to the `CONTAINER_NAMES_DEFAULT` array.
+
+-----
+
+
+### 🔔 Notifications
+
+To receive alerts, configure a notification channel in `config.sh`.
+
+  - **For Discord**: Set `NOTIFICATION_CHANNEL_DEFAULT="discord"` and provide your `DISCORD_WEBHOOK_URL_DEFAULT`.
+  - **For Ntfy**: Set `NOTIFICATION_CHANNEL_DEFAULT="ntfy"` and provide your `NTFY_SERVER_URL_DEFAULT` and `NTFY_TOPIC_DEFAULT`. Use `NTFY_ACCESS_TOKEN_DEFAULT` for private topics.
 
 -----
 
