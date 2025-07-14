@@ -240,3 +240,4 @@ All script output, including detailed checks, is logged to the file specified by
   - **Logs:** If the script doesn't behave as expected, check the `docker-monitor.log` file for detailed error messages.
   - **Dependencies:** Verify that `docker` is running and that `jq`, `skopeo`, `awk`, and `timeout` are installed and in the system's `PATH`.
   - **Container Names:** Double-check that container names in your configuration exactly match the output of `docker ps`.
+  - skopeo authentication: If you're checking private registries, make sure you’ve configured skopeo authentication via `/.docker/config.json`
