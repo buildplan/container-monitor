@@ -452,10 +452,18 @@ check_for_updates() {
             image_path_for_skopeo=$(echo "$image_name_no_tag" | cut -d'/' -f2-)
         fi
     else
-        # Handle official images on Docker Hub which need a 'library/' prefix
         image_path_for_skopeo="library/$image_name_no_tag"
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
+
+    # --- New: Function to get release URL ---
+    get_release_url() {
+        local image_to_check="$1"
+        local url_conf_file; url_conf_file="$(cd "$(dirname "$0")" && pwd)/release_urls.conf"
+        if [ -f "$url_conf_file" ]; then
+            grep "^${image_to_check}=" "$url_conf_file" | cut -d'=' -f2-
+        fi
+    }
 
     # 4. Handle 'latest' tag by comparing digests
     if [ "$current_tag" == "latest" ]; then
@@ -463,45 +471,46 @@ check_for_updates() {
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING"; return 1; fi
 
         local skopeo_output; skopeo_output=$(skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
-        if [ $? -ne 0 ]; then
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER"; return 1
-        fi
+        if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER"; return 1; fi
 
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} New 'latest' image available for '$current_image_ref'." "WARNING"; return 1
+            local log_message="New 'latest' image available for '$current_image_ref'."
+            local summary_message="Update available for 'latest' tag."
+            local release_url; release_url=$(get_release_url "$image_name_no_tag")
+            if [ -n "$release_url" ]; then
+                log_message+=" Release Notes: $release_url"
+                summary_message+=" Notes: $release_url"
+            fi
+            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $log_message" "WARNING"
+            echo "$summary_message"
+            return 1
         else
             print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD"; return 0
         fi
     fi
 
-    # 5. Handle versioned tags by finding the latest stable tag
-    # Get all tags, filter for stable semantic versions, sort them, and get the latest.
-    local latest_stable_version
-    latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | \
-                              jq -r '.Tags[]' | \
-                              grep -E '^[v]?[0-9\.]+$' | \
-                              grep -v -E 'alpha|beta|rc|dev|test' | \
-                              sort -V | \
-                              tail -n 1)
-
+    # 5. Handle versioned tags
+    local latest_stable_version; latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO"
         return 0
     fi
 
-    # Compare the current tag with the latest discovered stable version
-    # 'v' prefix is handled to allow comparing 'v2.10' with '2.10'
-    if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]]; then
-        # Use sort -V to determine if the latest version is actually newer
-        if [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})." "WARNING"; return 1
-        else
-            # This case handles running a newer (e.g., pre-release) version than the latest stable
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is newer than latest stable. No action needed." "GOOD"; return 0
+    if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
+        local log_message="Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})."
+        local summary_message="Update available: ${latest_stable_version}"
+        local release_url; release_url=$(get_release_url "$image_name_no_tag")
+        if [ -n "$release_url" ]; then
+            log_message+=" Release Notes: $release_url"
+            summary_message+=" | Notes: $release_url"
         fi
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $log_message" "WARNING"
+        echo "$summary_message"
+        return 1
     else
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is the latest stable version." "GOOD"; return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD"
+        return 0
     fi
 }
 
@@ -638,7 +647,11 @@ perform_checks_for_container() {
     check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
     check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
-    check_for_updates "$container_actual_name" "$current_image_ref_for_update"; if [ $? -ne 0 ]; then issue_tags+=("Update"); fi
+    local update_details
+    update_details=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update")
+    if [ $? -ne 0 ]; then
+        issue_tags+=("$update_details")
+    fi
     check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS=,; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
