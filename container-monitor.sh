@@ -593,7 +593,7 @@ pull_new_image() {
     print_message "Pulling new image for: $current_image_ref" "INFO"
     if docker pull "$current_image_ref"; then
         print_message "Successfully pulled new image for '$container_name_to_update'." "GOOD"
-        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} You now need to manually recreate the container (e.g., using 'docker-compose up -d' or your management tool) to apply the update." "WARNING"
+        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} You now need to manually recreate the container (e.g., using 'docker compose up -d --force-recreate' or your management tool) to apply the update." "WARNING"
     else
         print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
     fi
