@@ -25,6 +25,8 @@
 #
 # Usage:
 #   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
+#   ./container-monitor.sh --interactive-update      		- Interactively choose which containers to update.
+#   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
 #   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
@@ -42,7 +44,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.5"
+VERSION="v0.6"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -58,6 +60,7 @@ COLOR_BLUE="\033[0;34m"
 # --- Global Flags ---
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
+INTERACTIVE_UPDATE_MODE=false
 
 # --- Script Default Configuration Values ---
 _SCRIPT_DEFAULT_LOG_LINES_TO_CHECK=20
@@ -452,10 +455,18 @@ check_for_updates() {
             image_path_for_skopeo=$(echo "$image_name_no_tag" | cut -d'/' -f2-)
         fi
     else
-        # Handle official images on Docker Hub which need a 'library/' prefix
         image_path_for_skopeo="library/$image_name_no_tag"
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
+
+    # --- New: Function to get release URL ---
+    get_release_url() {
+        local image_to_check="$1"
+        local url_conf_file; url_conf_file="$(cd "$(dirname "$0")" && pwd)/release_urls.conf"
+        if [ -f "$url_conf_file" ]; then
+            grep "^${image_to_check}=" "$url_conf_file" | cut -d'=' -f2-
+        fi
+    }
 
     # 4. Handle 'latest' tag by comparing digests
     if [ "$current_tag" == "latest" ]; then
@@ -463,45 +474,46 @@ check_for_updates() {
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING"; return 1; fi
 
         local skopeo_output; skopeo_output=$(skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
-        if [ $? -ne 0 ]; then
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER"; return 1
-        fi
+        if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER"; return 1; fi
 
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} New 'latest' image available for '$current_image_ref'." "WARNING"; return 1
+            local log_message="New 'latest' image available for '$current_image_ref'."
+            local summary_message="Update available for 'latest' tag."
+            local release_url; release_url=$(get_release_url "$image_name_no_tag")
+            if [ -n "$release_url" ]; then
+                log_message+=" Release Notes: $release_url"
+                summary_message+=" Notes: $release_url"
+            fi
+            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $log_message" "WARNING"
+            echo "$summary_message"
+            return 1
         else
             print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD"; return 0
         fi
     fi
 
-    # 5. Handle versioned tags by finding the latest stable tag
-    # Get all tags, filter for stable semantic versions, sort them, and get the latest.
-    local latest_stable_version
-    latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | \
-                              jq -r '.Tags[]' | \
-                              grep -E '^[v]?[0-9\.]+$' | \
-                              grep -v -E 'alpha|beta|rc|dev|test' | \
-                              sort -V | \
-                              tail -n 1)
-
+    # 5. Handle versioned tags
+    local latest_stable_version; latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO"
         return 0
     fi
 
-    # Compare the current tag with the latest discovered stable version
-    # 'v' prefix is handled to allow comparing 'v2.10' with '2.10'
-    if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]]; then
-        # Use sort -V to determine if the latest version is actually newer
-        if [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})." "WARNING"; return 1
-        else
-            # This case handles running a newer (e.g., pre-release) version than the latest stable
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is newer than latest stable. No action needed." "GOOD"; return 0
+    if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
+        local log_message="Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})."
+        local summary_message="Update available: ${latest_stable_version}"
+        local release_url; release_url=$(get_release_url "$image_name_no_tag")
+        if [ -n "$release_url" ]; then
+            log_message+=" Release Notes: $release_url"
+            summary_message+=" | Notes: $release_url"
         fi
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $log_message" "WARNING"
+        echo "$summary_message"
+        return 1
     else
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is the latest stable version." "GOOD"; return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD"
+        return 0
     fi
 }
 
@@ -565,6 +577,89 @@ check_host_memory_usage() { # Echos output, does not call print_message directly
         output_string="  ${COLOR_BLUE}Host Memory Usage:${COLOR_RESET} 'free' command not found."
     fi
     echo "$output_string"
+}
+
+pull_new_image() {
+    local container_name_to_update="$1"
+    print_message "Getting image details for '$container_name_to_update'..." "INFO"
+
+    local current_image_ref
+    current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
+    if [ -z "$current_image_ref" ]; then
+        print_message "Could not find image for '$container_name_to_update'. Aborting update." "DANGER"
+        return 1
+    fi
+
+    print_message "Pulling new image for: $current_image_ref" "INFO"
+    if docker pull "$current_image_ref"; then
+        print_message "Successfully pulled new image for '$container_name_to_update'." "GOOD"
+        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} You now need to manually recreate the container (e.g., using 'docker compose up -d --force-recreate' or your management tool) to apply the update." "WARNING"
+    else
+        print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
+    fi
+}
+
+run_interactive_update_mode() {
+    print_message "Starting interactive update check..." "INFO"
+
+    local containers_with_updates=()
+    local container_update_details=() # Array to store the detailed message
+
+    # 1. Find all running containers
+    mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
+    if [ ${#all_containers[@]} -eq 0 ]; then
+        print_message "No running containers found to check." "INFO"
+        return
+    fi
+    print_message "Checking ${#all_containers[@]} containers for available updates..." "NONE"
+
+    # 2. Check each container for updates
+    for container in "${all_containers[@]}"; do
+        local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
+        local update_details; update_details=$(check_for_updates "$container" "$current_image")
+        if [ $? -ne 0 ]; then
+            containers_with_updates+=("$container")
+            container_update_details+=("$update_details")
+        fi
+    done
+
+    # 3. If no updates, exit
+    if [ ${#containers_with_updates[@]} -eq 0 ]; then
+        print_message "All containers are up-to-date. Nothing to do. ✅" "GOOD"
+        return
+    fi
+
+    # 4. If updates are found, present the menu
+    print_message "The following containers have updates available:" "INFO"
+    for i in "${!containers_with_updates[@]}"; do
+        echo -e "  ${COLOR_CYAN}[$((i + 1))]${COLOR_RESET} ${containers_with_updates[i]} (${COLOR_YELLOW}${container_update_details[i]}${COLOR_RESET})"
+    done
+    echo ""
+
+    # 5. Get user input
+    read -rp "Enter the number(s) of the containers to update (e.g., '1' or '1,3'), or 'all', or press Enter to cancel: " choice
+    if [ -z "$choice" ]; then
+        print_message "Update cancelled by user." "INFO"
+        return
+    fi
+
+    # 6. Process the choice and pull images
+    if [ "$choice" == "all" ]; then
+        for container_to_update in "${containers_with_updates[@]}"; do
+            pull_new_image "$container_to_update"
+        done
+    else
+        IFS=',' read -r -a selections <<< "$choice"
+        for sel in "${selections[@]}"; do
+            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+                pull_new_image "${containers_with_updates[$((sel - 1))]}"
+            else
+                print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+            fi
+        done
+    fi
+
+    print_message "Interactive update process finished." "INFO"
 }
 
 print_summary() { # Uses print_message with FORCE_STDOUT
@@ -638,7 +733,11 @@ perform_checks_for_container() {
     check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
     check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
-    check_for_updates "$container_actual_name" "$current_image_ref_for_update"; if [ $? -ne 0 ]; then issue_tags+=("Update"); fi
+    local update_details
+    update_details=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update")
+    if [ $? -ne 0 ]; then
+        issue_tags+=("$update_details")
+    fi
     check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS=,; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
@@ -651,12 +750,35 @@ declare -a WARNING_OR_ERROR_CONTAINERS=()
 declare -A CONTAINER_ISSUES_MAP
 
 # --- Argument & Mode Parsing ---
+
+declare -a CONTAINERS_TO_EXCLUDE=()
+declare -a new_args=()
+# Process arguments, separating the --exclude flag from the rest
+for arg in "$@"; do
+    case "$arg" in
+        --exclude=*)
+            EXCLUDE_STR="${arg#*=}"
+            IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+            ;;
+        *)
+            new_args+=("$arg")
+            ;;
+    esac
+done
+set -- "${new_args[@]}"
+
 run_update_check=true
 if [ "$1" == "--no-update" ]; then run_update_check=false; shift; fi
 
 if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
     latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
     if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then self_update; fi
+fi
+
+INTERACTIVE_UPDATE_MODE=false
+if [ "$1" == "--interactive-update" ]; then
+    INTERACTIVE_UPDATE_MODE=true
+    shift
 fi
 
 if [ "$#" -gt 0 ] && [ "$1" = "summary" ]; then SUMMARY_ONLY_MODE=true; shift; fi
@@ -716,7 +838,31 @@ if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
     fi
 fi
 
+# Filter out excluded containers if the exclude list has items
+if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
+    declare -a temp_containers_to_check=()
+    for container in "${CONTAINERS_TO_CHECK[@]}"; do
+        is_excluded=false
+        for excluded in "${CONTAINERS_TO_EXCLUDE[@]}"; do
+            if [[ "$container" == "$excluded" ]]; then
+                is_excluded=true
+                break
+            fi
+        done
+        if [ "$is_excluded" = false ]; then
+            temp_containers_to_check+=("$container")
+        fi
+    done
+    # Replace the original array with the filtered one
+    CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
+fi
+
 # --- Run Monitoring ---
+if [ "$INTERACTIVE_UPDATE_MODE" = "true" ]; then
+    run_interactive_update_mode
+    exit 0
+fi
+
 if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
     results_dir=$(mktemp -d)
     export -f perform_checks_for_container print_message check_container_status check_container_restarts \
