@@ -1,0 +1,46 @@
+name: Test Script Execution
+
+# This workflow runs only on pushes to the 'dev' branch
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  dry-run:
+    name: Dry Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq skopeo gawk
+
+      - name: Make script executable
+        run: chmod +x container-monitor.sh
+
+      - name: Run test commands
+        run: |
+          echo "Running script execution tests..."
+
+          # Test 1: Run in summary mode. Should execute without errors.
+          echo "Testing: ./container-monitor.sh summary"
+          ./container-monitor.sh summary
+
+          # Test 2: Test the --exclude flag.
+          echo "Testing: ./container-monitor.sh --exclude=foo,bar summary"
+          ./container-monitor.sh --exclude=foo,bar summary
+
+          # Test 3: Test the logs command.
+          echo "Testing: ./container-monitor.sh logs fake-container"
+          ./container-monitor.sh logs fake-container
+
+          # Test 4: Test providing a specific container name.
+          echo "Testing: ./container-monitor.sh some-container-name"
+          ./container-monitor.sh some-container-name
+
+          echo "All test commands executed successfully."

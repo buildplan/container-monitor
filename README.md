@@ -1,5 +1,9 @@
 # Docker Container Monitor
 
+[![Shell Script Linting](https://github.com/buildplan/container-monitor/actions/workflows/lint.yml/badge.svg)](https://github.com/buildplan/container-monitor/actions/workflows/lint.yml)
+[![Test Script Execution](https://github.com/buildplan/container-monitor/actions/workflows/test-execution.yml/badge.svg)](https://github.com/buildplan/container-monitor/actions/workflows/test-execution.yml)
+
+
 A comprehensive Bash script to monitor Docker containers. It checks container health, resource usage, and image updates, sending notifications about any issues it finds. The script is designed to be fast, efficient, and easily automated.
 
 ### ✨ Features
