@@ -22,7 +22,7 @@ HOST_DISK_CHECK_FILESYSTEM_DEFAULT="/"
 
 ## --- Notification Settings ---
 # Set channel: "discord", "ntfy", or "none"
-NOTIFICATION_CHANNEL_DEFAULT="ntfy"
+NOTIFICATION_CHANNEL_DEFAULT="none"
 NTFY_SERVER_URL_DEFAULT="https://ntfy.sh" # URL for your ntfy server
 NTFY_TOPIC_DEFAULT="your_ntfy_topic_here" # Ntfy.sh Topic (required for "ntfy")
 NTFY_ACCESS_TOKEN_DEFAULT=""
