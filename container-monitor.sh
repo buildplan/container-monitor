@@ -199,28 +199,27 @@ print_message() {
 send_discord_notification() {
     local message="$1"
     local title="$2"
-    if [[ "$DISCORD_WEBHOOK_URL" != *"your_discord_webhook_url_here"* && -n "$DISCORD_WEBHOOK_URL" ]]; then
-        # Create a JSON-safe version of the message by replacing newlines with \n
-        json_message=$(echo "$message" | sed 's/$/\\n/' | tr -d '\n')
 
-        # Construct the JSON payload
-        json_payload=$(cat <<EOF
-{
-  "username": "Docker Monitor",
-  "embeds": [{
-    "title": "$title",
-    "description": "$json_message",
-    "color": 15158332,
-    "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
-  }]
-}
-EOF
-)
-        # Send the payload
-        curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
-    else
+    if [[ "$DISCORD_WEBHOOK_URL" == *"your_discord_webhook_url_here"* || -z "$DISCORD_WEBHOOK_URL" ]]; then
         print_message "Discord webhook URL is not configured." "DANGER"
+        return
     fi
+
+    local json_payload
+    json_payload=$(jq -n \
+                  --arg title "$title" \
+                  --arg description "$message" \
+                  '{
+                    "username": "Docker Monitor",
+                    "embeds": [{
+                      "title": $title,
+                      "description": $description,
+                      "color": 15158332,
+                      "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")'"
+                    }]
+                  }')
+
+    curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
 }
 
 send_ntfy_notification() {
@@ -237,7 +236,6 @@ send_ntfy_notification() {
          return
     fi
 
-    # Send the notification using the configured server URL and topic
     curl -s -H "Title: $title" -H "Tags: warning" -H "$auth_header" -d "$message" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
 
@@ -432,9 +430,9 @@ check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
 
     # 1. Prerequisite and Initial Checks
-    if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO"; return 0; fi
+    if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
     if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO"; return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
 
     # 2. Extract Image Name and Tag
@@ -459,7 +457,6 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
 
-    # --- New: Function to get release URL ---
     get_release_url() {
         local image_to_check="$1"
         local url_conf_file; url_conf_file="$(cd "$(dirname "$0")" && pwd)/release_urls.conf"
@@ -471,48 +468,40 @@ check_for_updates() {
     # 4. Handle 'latest' tag by comparing digests
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
-        if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING"; return 1; fi
+        if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
 
         local skopeo_output; skopeo_output=$(skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
-        if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER"; return 1; fi
+        if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
 
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
-            local log_message="New 'latest' image available for '$current_image_ref'."
-            local summary_message="Update available for 'latest' tag."
+            local summary_message="Update available for 'latest' tag"
             local release_url; release_url=$(get_release_url "$image_name_no_tag")
-            if [ -n "$release_url" ]; then
-                log_message+=" Release Notes: $release_url"
-                summary_message+=" Notes: $release_url"
-            fi
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $log_message" "WARNING"
+            if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
+            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} New 'latest' image available for '$current_image_ref'." "WARNING" >&2
             echo "$summary_message"
             return 1
         else
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD"; return 0
+            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2; return 0
         fi
     fi
 
     # 5. Handle versioned tags
     local latest_stable_version; latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
     if [ -z "$latest_stable_version" ]; then
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO"
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2
         return 0
     fi
 
     if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
-        local log_message="Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})."
         local summary_message="Update available: ${latest_stable_version}"
         local release_url; release_url=$(get_release_url "$image_name_no_tag")
-        if [ -n "$release_url" ]; then
-            log_message+=" Release Notes: $release_url"
-            summary_message+=" | Notes: $release_url"
-        fi
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $log_message" "WARNING"
+        if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})." "WARNING" >&2
         echo "$summary_message"
         return 1
     else
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD"
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2
         return 0
     fi
 }
