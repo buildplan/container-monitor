@@ -44,7 +44,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.8"
+VERSION="v0.9"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -917,14 +917,17 @@ main() {
 
         print_summary
 
-        if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+	if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
                 summary_message+="\n- **$container**: $issues"
             done
             summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
-            send_notification "$summary_message" "🚨 Docker Monitoring Alert"
+
+            # Add the hostname to the notification title
+            local notification_title="🚨 Docker Alert on $(hostname)"
+            send_notification "$summary_message" "$notification_title"
         fi
 
         rm -rf "$results_dir"
