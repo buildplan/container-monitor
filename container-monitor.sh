@@ -39,12 +39,13 @@
 # Prerequisites:
 #   - Docker
 #   - jq (for processing JSON output from docker inspect and docker stats)
+#   - yq (for yaml config file)
 #   - skopeo (for checking for container image updates)
 #   - bc or awk (awk is used in this script for float comparisons to reduce dependencies)
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.11"
+VERSION="v0.12-t"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -98,46 +99,55 @@ NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
-# --- Source Configuration File (config.sh) ---
-_CONFIG_FILE_PATH="$SCRIPT_DIR/config.sh"
-if [ -f "$_CONFIG_FILE_PATH" ]; then
-    source "$_CONFIG_FILE_PATH"
-    LOG_LINES_TO_CHECK="${LOG_LINES_TO_CHECK_DEFAULT:-$LOG_LINES_TO_CHECK}"
-    CHECK_FREQUENCY_MINUTES="${CHECK_FREQUENCY_MINUTES_DEFAULT:-$CHECK_FREQUENCY_MINUTES}"
-    LOG_FILE="${LOG_FILE_DEFAULT:-$LOG_FILE}"
-    CPU_WARNING_THRESHOLD="${CPU_WARNING_THRESHOLD_DEFAULT:-$CPU_WARNING_THRESHOLD}"
-    MEMORY_WARNING_THRESHOLD="${MEMORY_WARNING_THRESHOLD_DEFAULT:-$MEMORY_WARNING_THRESHOLD}"
-    DISK_SPACE_THRESHOLD="${DISK_SPACE_THRESHOLD_DEFAULT:-$DISK_SPACE_THRESHOLD}"
-    NETWORK_ERROR_THRESHOLD="${NETWORK_ERROR_THRESHOLD_DEFAULT:-$NETWORK_ERROR_THRESHOLD}"
-    HOST_DISK_CHECK_FILESYSTEM="${HOST_DISK_CHECK_FILESYSTEM_DEFAULT:-$HOST_DISK_CHECK_FILESYSTEM}"
-    NOTIFICATION_CHANNEL="${NOTIFICATION_CHANNEL_DEFAULT:-$NOTIFICATION_CHANNEL}"
-    DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL_DEFAULT:-$DISCORD_WEBHOOK_URL}"
-    NTFY_SERVER_URL="${NTFY_SERVER_URL_DEFAULT:-$NTFY_SERVER_URL}"
-    NTFY_TOPIC="${NTFY_TOPIC_DEFAULT:-$NTFY_TOPIC}"
-    NTFY_ACCESS_TOKEN="${NTFY_ACCESS_TOKEN_DEFAULT:-$NTFY_ACCESS_TOKEN}"
-    if declare -p CONTAINER_NAMES_DEFAULT &>/dev/null && [[ "$(declare -p CONTAINER_NAMES_DEFAULT)" == "declare -a"* ]]; then
-        if [ ${#CONTAINER_NAMES_DEFAULT[@]} -gt 0 ]; then
-            CONTAINER_NAMES_FROM_CONFIG_FILE=("${CONTAINER_NAMES_DEFAULT[@]}")
-        fi
-    fi
-else
-    echo -e "${COLOR_YELLOW}[WARNING]${COLOR_RESET} Configuration file '$_CONFIG_FILE_PATH' not found. Using script defaults or environment variables."
-fi
+# --- Load Configuration (Priority: Env > YAML > Default) ---
+_CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
 
-# --- Override with Environment Variables ---
-LOG_LINES_TO_CHECK="${LOG_LINES_TO_CHECK:-$LOG_LINES_TO_CHECK}"
-CHECK_FREQUENCY_MINUTES="${CHECK_FREQUENCY_MINUTES:-$CHECK_FREQUENCY_MINUTES}"
-LOG_FILE="${LOG_FILE:-$LOG_FILE}"
-CPU_WARNING_THRESHOLD="${CPU_WARNING_THRESHOLD:-$CPU_WARNING_THRESHOLD}"
-MEMORY_WARNING_THRESHOLD="${MEMORY_WARNING_THRESHOLD:-$MEMORY_WARNING_THRESHOLD}"
-DISK_SPACE_THRESHOLD="${DISK_SPACE_THRESHOLD:-$DISK_SPACE_THRESHOLD}"
-NETWORK_ERROR_THRESHOLD="${NETWORK_ERROR_THRESHOLD:-$NETWORK_ERROR_THRESHOLD}"
-HOST_DISK_CHECK_FILESYSTEM="${HOST_DISK_CHECK_FILESYSTEM:-$HOST_DISK_CHECK_FILESYSTEM}"
-NOTIFICATION_CHANNEL="${NOTIFICATION_CHANNEL:-$NOTIFICATION_CHANNEL}"
-DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK_URL}"
-NTFY_SERVER_URL="${NTFY_SERVER_URL:-$NTFY_SERVER_URL}"
-NTFY_TOPIC="${NTFY_TOPIC:-$NTFY_TOPIC}"
-NTFY_ACCESS_TOKEN="${NTFY_ACCESS_TOKEN:-$NTFY_ACCESS_TOKEN}"
+# Helper function to read a value from YAML, returning an empty string if not found
+get_config_val() {
+    if [ -f "$_CONFIG_FILE_PATH" ]; then
+        yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
+    else
+        echo ""
+    fi
+}
+
+# sets a final variable value based on the priority: ENV > YAML > Default
+# Usage: set_final_config "VARIABLE_NAME_IN_SCRIPT" "YAML_PATH" "DEFAULT_VALUE"
+set_final_config() {
+    local var_name="$1"
+    local yaml_path="$2"
+    local default_value="$3"
+
+    local env_value; env_value=$(printenv "$var_name")
+    local yaml_value; yaml_value=$(get_config_val "$yaml_path")
+
+    if [ -n "$env_value" ]; then
+        printf -v "$var_name" '%s' "$env_value"
+    elif [ -n "$yaml_value" ]; then
+        printf -v "$var_name" '%s' "$yaml_value"
+    else
+        printf -v "$var_name" '%s' "$default_value"
+    fi
+}
+
+# Set all configuration variables
+set_final_config "LOG_LINES_TO_CHECK"           ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
+set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
+set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
+set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
+set_final_config "DISK_SPACE_THRESHOLD"          ".thresholds.disk_space"                "$_SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD"
+set_final_config "NETWORK_ERROR_THRESHOLD"       ".thresholds.network_error"             "$_SCRIPT_DEFAULT_NETWORK_ERROR_THRESHOLD"
+set_final_config "HOST_DISK_CHECK_FILESYSTEM"    ".host_system.disk_check_filesystem"    "$_SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM"
+set_final_config "NOTIFICATION_CHANNEL"          ".notifications.channel"                "$_SCRIPT_DEFAULT_NOTIFICATION_CHANNEL"
+set_final_config "DISCORD_WEBHOOK_URL"           ".notifications.discord.webhook_url"    "$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL"
+set_final_config "NTFY_SERVER_URL"               ".notifications.ntfy.server_url"        "$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
+set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
+set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
+
+# Load the list of default containers from the config file if no ENV var is set for it
+if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
+    mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH")
+fi
 
 # --- Prerequisite Checks ---
 if ! command -v docker &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} Docker command not found." >&2; exit 1; fi
@@ -145,6 +155,7 @@ if ! command -v jq &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} 
 if ! command -v skopeo &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} skopeo not found. Update checks will be skipped." >&2; fi
 if ! command -v awk &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} awk command not found." >&2; exit 1; fi
 if ! command -v timeout &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} timeout command not found." >&2; exit 1; fi
+if ! command -v yq &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} yq not found. It is required for parsing config.yml." >&2; exit 1; fi
 
 # --- Functions ---
 
@@ -463,10 +474,13 @@ check_for_updates() {
 
     get_release_url() {
         local image_to_check="$1"
-	local url_conf_file; url_conf_file="$SCRIPT_DIR/release_urls.conf"
-        if [ -f "$url_conf_file" ]; then
-            grep "^${image_to_check}=" "$url_conf_file" | cut -d'=' -f2-
+        local config_file="$SCRIPT_DIR/config.yml"
+
+        if [ ! -f "$config_file" ]; then
+            return
         fi
+
+        yq e ".containers.release_urls.\"${image_to_check}\" // \"\"" "$config_file"
     }
 
     # 4. Handle 'latest' tag by comparing digests

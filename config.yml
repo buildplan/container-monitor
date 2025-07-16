@@ -1,0 +1,39 @@
+# Docker Container Monitor Configuration
+
+general:
+  log_lines_to_check: 40
+  log_file: "docker-monitor.log"
+
+thresholds:
+  cpu_warning: 80
+  memory_warning: 80
+  disk_space: 80
+  network_error: 10
+
+host_system:
+  disk_check_filesystem: "/"
+
+notifications:
+  # Set channel to "discord", "ntfy", or "none"
+  channel: "none"
+  discord:
+    webhook_url: "https://discord.com/api/webhooks/xxxxxxxx"
+  ntfy:
+    server_url: "https://ntfy.sh"
+    topic: "your_ntfy_topic_here"
+    access_token: ""
+
+containers:
+  # Add the names of containers to monitor by default
+  monitor_defaults:
+    - "dozzle-agent"
+    - "komodo-periphery"
+    - "beszel-agent"
+
+  # URLs for release notes, used for update checks
+  release_urls:
+    amir20/dozzle: "https://github.com/amir20/dozzle/releases"
+    ghcr.io/moghtech/komodo-periphery: "https://github.com/moghtech/komodo/releases"
+    henrygd/beszel: "https://github.com/henrygd/beszel/releases"
+    portainer/portainer-ce: "https://github.com/portainer/portainer/releases"
+    lscr.io/linuxserver/radarr: "https://github.com/lscr.io/linuxserver.io/pkgs/container/radarr"
