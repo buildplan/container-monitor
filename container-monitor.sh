@@ -403,18 +403,35 @@ send_discord_notification() {
 send_ntfy_notification() {
     local message="$1"
     local title="$2"
-    local auth_header=""
 
-    if [[ -n "$NTFY_ACCESS_TOKEN" ]]; then
-        auth_header="Authorization: Bearer $NTFY_ACCESS_TOKEN"
-    fi
-
-    if [[ "$NTFY_SERVER_URL" == "https://ntfy.sh" && "$NTFY_TOPIC" == "your_ntfy_topic_here" ]]; then
-         print_message "Ntfy topic is not configured." "DANGER"
+    if [[ "$NTFY_TOPIC" == "your_ntfy_topic_here" || -z "$NTFY_TOPIC" ]]; then
+         print_message "Ntfy topic is not configured in config.yml." "DANGER"
          return
     fi
 
-    curl -s -H "Title: $title" -H "Tags: warning" -H "$auth_header" -d "$message" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
+    local priority; priority=$(get_config_val ".notifications.ntfy.priority")
+    local icon_url; icon_url=$(get_config_val ".notifications.ntfy.icon_url")
+    local click_url; click_url=$(get_config_val ".notifications.ntfy.click_url")
+    local curl_opts=()
+    curl_opts+=("-s")
+    curl_opts+=("-H" "Title: $title")
+    curl_opts+=("-H" "Tags: warning")
+
+    if [[ -n "$priority" ]]; then
+        curl_opts+=("-H" "Priority: $priority")
+    fi
+    if [[ -n "$icon_url" ]]; then
+        curl_opts+=("-H" "Icon: $icon_url")
+    fi
+    if [[ -n "$click_url" ]]; then
+        curl_opts+=("-H" "Click: $click_url")
+    fi
+    if [[ -n "$NTFY_ACCESS_TOKEN" ]]; then
+        curl_opts+=("-H" "Authorization: Bearer $NTFY_ACCESS_TOKEN")
+    fi
+
+    curl_opts+=("-d" "$message")
+    curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
 
 send_notification() {
@@ -1127,7 +1144,7 @@ main() {
             local summary_message=""
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
-                summary_message+="\n- **$container**: $issues"
+		summary_message+="\n[$container]\n- $issues\n"
             done
             summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
 
