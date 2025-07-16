@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.20"
+VERSION="v0.21"
 VERSION_DATE="2025-07-16"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -102,6 +102,8 @@ NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 load_configuration() {
+    _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
+
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
             yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
@@ -110,12 +112,9 @@ load_configuration() {
         fi
     }
 
-    # Sets a final variable value based on the priority: ENV > YAML > Default
+    # Helper function to set a final variable value based on priority
     set_final_config() {
-        local var_name="$1"
-        local yaml_path="$2"
-        local default_value="$3"
-
+        local var_name="$1"; local yaml_path="$2"; local default_value="$3"
         local env_value; env_value=$(printenv "$var_name")
         local yaml_value; yaml_value=$(get_config_val "$yaml_path")
 
@@ -143,12 +142,10 @@ load_configuration() {
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 
     # Load the list of default containers from the config file if no ENV var is set for it
-    if [ -z "$CONTAINER_NAMES" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
-        mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$SCRIPT_DIR/config.yml")
+    if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
+        mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
-
 }
-
 
 # --- Functions ---
 
@@ -406,18 +403,35 @@ send_discord_notification() {
 send_ntfy_notification() {
     local message="$1"
     local title="$2"
-    local auth_header=""
 
-    if [[ -n "$NTFY_ACCESS_TOKEN" ]]; then
-        auth_header="Authorization: Bearer $NTFY_ACCESS_TOKEN"
-    fi
-
-    if [[ "$NTFY_SERVER_URL" == "https://ntfy.sh" && "$NTFY_TOPIC" == "your_ntfy_topic_here" ]]; then
-         print_message "Ntfy topic is not configured." "DANGER"
+    if [[ "$NTFY_TOPIC" == "your_ntfy_topic_here" || -z "$NTFY_TOPIC" ]]; then
+         print_message "Ntfy topic is not configured in config.yml." "DANGER"
          return
     fi
 
-    curl -s -H "Title: $title" -H "Tags: warning" -H "$auth_header" -d "$message" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
+    local priority; priority=$(get_config_val ".notifications.ntfy.priority")
+    local icon_url; icon_url=$(get_config_val ".notifications.ntfy.icon_url")
+    local click_url; click_url=$(get_config_val ".notifications.ntfy.click_url")
+    local curl_opts=()
+    curl_opts+=("-s")
+    curl_opts+=("-H" "Title: $title")
+    curl_opts+=("-H" "Tags: warning")
+
+    if [[ -n "$priority" ]]; then
+        curl_opts+=("-H" "Priority: $priority")
+    fi
+    if [[ -n "$icon_url" ]]; then
+        curl_opts+=("-H" "Icon: $icon_url")
+    fi
+    if [[ -n "$click_url" ]]; then
+        curl_opts+=("-H" "Click: $click_url")
+    fi
+    if [[ -n "$NTFY_ACCESS_TOKEN" ]]; then
+        curl_opts+=("-H" "Authorization: Bearer $NTFY_ACCESS_TOKEN")
+    fi
+
+    curl_opts+=("-d" "$message")
+    curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
 
 send_notification() {
@@ -1130,7 +1144,7 @@ main() {
             local summary_message=""
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
-                summary_message+="\n- **$container**: $issues"
+		summary_message+="\n[$container]\n- $issues\n"
             done
             summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
 
