@@ -46,6 +46,7 @@
 
 # --- Script & Update Configuration ---
 VERSION="v0.12-t"
+VERSION_DATE="2025-07-16"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -62,6 +63,7 @@ COLOR_BLUE="\033[0;34m"
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
 INTERACTIVE_UPDATE_MODE=false
+UPDATE_SKIPPED=false
 
 # --- Get path to script directory ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -151,6 +153,35 @@ fi
 
 
 # --- Functions ---
+
+print_header_box() {
+    # Prepare the lines of content
+    local line1="Container Monitor ${VERSION}"
+    local line2="Updated: ${VERSION_DATE}"
+    local line3=""
+    if [ "$UPDATE_SKIPPED" = true ]; then
+        line3="A new version is available. Run the script again to update."
+    fi
+
+    # Find the length of the longest line
+    local max_len=${#line1}
+    if (( ${#line2} > max_len )); then max_len=${#line2}; fi
+    if (( ${#line3} > max_len )); then max_len=${#line3}; fi
+
+    # Create the top/bottom border string
+    local border; border=$(printf '─%.0s' $(seq 1 "$((max_len + 2))"))
+
+    # Print the box
+    echo -e "${COLOR_CYAN}┌${border}┐${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}│ ${COLOR_GREEN}$(printf "%-s" "$line1" | sed -e :a -e "s/^.\{1,$max_len\}$/& /;ta")${COLOR_CYAN} │${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}│ ${COLOR_RESET}$(printf "%-s" "$line2" | sed -e :a -e "s/^.\{1,$max_len\}$/& /;ta")${COLOR_CYAN} │${COLOR_RESET}"
+    if [ -n "$line3" ]; then
+        echo -e "${COLOR_CYAN}├${border}┤${COLOR_RESET}"
+        echo -e "${COLOR_CYAN}│ ${COLOR_YELLOW}$(printf "%-s" "$line3" | sed -e :a -e "s/^.\{1,$max_len\}$/& /;ta")${COLOR_CYAN} │${COLOR_RESET}"
+    fi
+    echo -e "${COLOR_CYAN}└${border}┘${COLOR_RESET}"
+    echo # Add a blank line for spacing
+}
 
 check_and_install_dependencies() {
     local missing_packages=()
@@ -326,6 +357,7 @@ self_update() {
     echo "A new version of this script is available. Would you like to update now? (y/n)"
     read -r response
     if [[ ! "$response" =~ ^[yY]$ ]]; then
+        UPDATE_SKIPPED=true
         return
     fi
 
@@ -814,6 +846,11 @@ perform_checks_for_container() {
 
 main() {
     check_and_install_dependencies
+
+    # print header
+    if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
+        print_header_box
+    fi
 
     # Re-enable local variables
     declare -a CONTAINERS_TO_CHECK=()
