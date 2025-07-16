@@ -149,15 +149,74 @@ if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
     mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH")
 fi
 
-# --- Prerequisite Checks ---
-if ! command -v docker &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} Docker command not found." >&2; exit 1; fi
-if ! command -v jq &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} jq command not found." >&2; exit 1; fi
-if ! command -v skopeo &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} skopeo not found. Update checks will be skipped." >&2; fi
-if ! command -v awk &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} awk command not found." >&2; exit 1; fi
-if ! command -v timeout &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} timeout command not found." >&2; exit 1; fi
-if ! command -v yq &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} yq not found. It is required for parsing config.yml." >&2; exit 1; fi
 
 # --- Functions ---
+
+check_and_install_dependencies() {
+    local missing_packages=()
+    local os_id=""
+
+    # Check for /etc/os-release to determine the OS
+    if [ -f /etc/os-release ]; then
+        os_id=$(grep -E '^ID=' /etc/os-release | cut -d'=' -f2)
+    fi
+
+    # Define dependencies and their package names for supported systems
+    declare -A deps=(
+        [jq]=jq
+        [skopeo]=skopeo
+        [awk]=gawk
+        [timeout]=coreutils
+    )
+
+    print_message "Checking for required command-line tools..." "INFO"
+
+    # Check for complex, manually installed dependencies first
+    if ! command -v docker &>/dev/null; then
+        print_message "Docker is not installed. This is a critical dependency. Please install it by following the official instructions at https://docs.docker.com/engine/install/" "DANGER"
+        exit 1
+    fi
+    if ! command -v yq &>/dev/null; then
+        print_message "yq is not installed. It is required for parsing config.yml. Please install it from https://github.com/mikefarah/yq/" "DANGER"
+        exit 1
+    fi
+
+    # Check for simple, installable dependencies
+    for cmd in "${!deps[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_packages+=("${deps[$cmd]}")
+        fi
+    done
+
+    # If packages are missing, offer to install them
+    if [ ${#missing_packages[@]} -gt 0 ]; then
+        print_message "The following required packages are missing: ${missing_packages[*]}" "WARNING"
+
+        case "$os_id" in
+            "ubuntu"|"debian")
+                read -rp "Would you like to attempt to install them now with 'apt'? (y/n): " response
+                if [[ "$response" =~ ^[yY]$ ]]; then
+                    print_message "Attempting to install with 'sudo apt-get install'... You may be prompted for your password." "INFO"
+                    if sudo apt-get update && sudo apt-get install -y "${missing_packages[@]}"; then
+                        print_message "Dependencies installed successfully." "GOOD"
+                    else
+                        print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                        exit 1
+                    fi
+                else
+                    print_message "Installation cancelled. Please install the missing packages manually." "DANGER"
+                    exit 1
+                fi
+                ;;
+            *)
+                print_message "Your OS ($os_id) is not supported for automatic installation. Please install the missing packages manually." "DANGER"
+                exit 1
+                ;;
+        esac
+    else
+        print_message "All required dependencies are installed." "GOOD"
+    fi
+}
 
 print_message() {
     local message="$1"
@@ -754,6 +813,8 @@ perform_checks_for_container() {
 # --- Main Execution ---
 
 main() {
+    check_and_install_dependencies
+
     # Re-enable local variables
     declare -a CONTAINERS_TO_CHECK=()
     declare -a WARNING_OR_ERROR_CONTAINERS=()
