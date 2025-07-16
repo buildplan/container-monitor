@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.12-t"
+VERSION="v0.12"
 VERSION_DATE="2025-07-16"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -102,7 +102,6 @@ NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 load_configuration() {
-    # Helper function to read a value from YAML, returning an empty string if not found
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
             yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
