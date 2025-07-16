@@ -6,7 +6,7 @@
 # The main script will handle environment variable overrides and validation.
 
 ## --- General Settings ---
-LOG_LINES_TO_CHECK_DEFAULT=20
+LOG_LINES_TO_CHECK_DEFAULT=40
 CHECK_FREQUENCY_MINUTES_DEFAULT=360
 LOG_FILE_DEFAULT="docker-monitor.log"
 

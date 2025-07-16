@@ -44,7 +44,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.9"
+VERSION="v0.10"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -62,17 +62,20 @@ SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
 INTERACTIVE_UPDATE_MODE=false
 
+# --- Get path to script directory ---
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # --- Script Default Configuration Values ---
 _SCRIPT_DEFAULT_LOG_LINES_TO_CHECK=20
 _SCRIPT_DEFAULT_CHECK_FREQUENCY_MINUTES=360
-_SCRIPT_DEFAULT_LOG_FILE="$(cd "$(dirname "$0")" && pwd)/docker-monitor.log"
+_SCRIPT_DEFAULT_LOG_FILE="$SCRIPT_DIR/docker-monitor.log"
 _SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD=80
 _SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD=80
 _SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD=80
 _SCRIPT_DEFAULT_NETWORK_ERROR_THRESHOLD=10
 _SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM="/"
 _SCRIPT_DEFAULT_NOTIFICATION_CHANNEL="none"
-_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL="your_discord_webhook_url_here"
+_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/xxxxxxxx"
 _SCRIPT_DEFAULT_NTFY_SERVER_URL="https://ntfy.sh"
 _SCRIPT_DEFAULT_NTFY_TOPIC="your_ntfy_topic_here"
 _SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN=""
@@ -95,7 +98,7 @@ NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 # --- Source Configuration File (config.sh) ---
-_CONFIG_FILE_PATH="$(cd "$(dirname "$0")" && pwd)/config.sh"
+_CONFIG_FILE_PATH="$SCRIPT_DIR/config.sh"
 if [ -f "$_CONFIG_FILE_PATH" ]; then
     source "$_CONFIG_FILE_PATH"
     LOG_LINES_TO_CHECK="${LOG_LINES_TO_CHECK_DEFAULT:-$LOG_LINES_TO_CHECK}"
@@ -255,7 +258,7 @@ self_update() {
         return
     fi
 
-    # Create a temporary directory to ensure a clean working area
+    # Create a temporary directory
     local temp_dir
     temp_dir=$(mktemp -d)
     if [ ! -d "$temp_dir" ]; then
@@ -459,7 +462,7 @@ check_for_updates() {
 
     get_release_url() {
         local image_to_check="$1"
-        local url_conf_file; url_conf_file="$(cd "$(dirname "$0")" && pwd)/release_urls.conf"
+	local url_conf_file; url_conf_file="$SCRIPT_DIR/release_urls.conf"
         if [ -f "$url_conf_file" ]; then
             grep "^${image_to_check}=" "$url_conf_file" | cut -d'=' -f2-
         fi
@@ -531,9 +534,9 @@ save_logs() {
 }
 
 check_host_disk_usage() { # Echos output, does not call print_message directly
-    local target_filesystem="${HOST_DISK_CHECK_FILESYSTEM:-/}" 
+    local target_filesystem="${HOST_DISK_CHECK_FILESYSTEM:-/}"
     local usage_line size_hr used_hr avail_hr capacity
-    local output_string 
+    local output_string
 
     usage_line=$(df -Ph "$target_filesystem" 2>/dev/null | awk 'NR==2')
     if [ -n "$usage_line" ]; then
@@ -736,7 +739,7 @@ perform_checks_for_container() {
 # --- Main Execution ---
 
 main() {
-    # Re-enable local variables, as we are now inside a function
+    # Re-enable local variables
     declare -a CONTAINERS_TO_CHECK=()
     declare -a WARNING_OR_ERROR_CONTAINERS=()
     declare -A CONTAINER_ISSUES_MAP
@@ -768,7 +771,7 @@ main() {
 
     if [[ "$1" == "--interactive-update" ]]; then
         run_interactive_update_mode
-        return 0 # Exit the main function
+        return 0
     fi
 
     if [[ "$#" -gt 0 && "$1" == "summary" ]]; then SUMMARY_ONLY_MODE=true; shift; fi
@@ -783,7 +786,7 @@ main() {
 
               if [[ "$container_to_log" == "all" ]]; then
                   echo "Please specify a container name to view its logs."
-                  return 1 # Exit the main function
+                  return 1
               fi
 
               if [[ "$filter_type" == "errors" ]]; then
@@ -793,7 +796,7 @@ main() {
                   echo "--- Showing logs for $container_to_log ---"
                   docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
               fi
-              return 0 # Exit the main function
+              return 0
               ;;
             save)
               shift
@@ -803,7 +806,7 @@ main() {
               else
                 echo "Usage: $0 save logs <container_name>"
               fi
-              return 0 # Exit the main function
+              return 0
               ;;
             *)
               CONTAINERS_TO_CHECK=("$@")
@@ -925,8 +928,7 @@ main() {
             done
             summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
 
-            # Add the hostname to the notification title
-            local notification_title="🚨 Docker Alert on $(hostname)"
+            local notification_title="🚨 Container Monitor on $(hostname)"
             send_notification "$summary_message" "$notification_title"
         fi
 
@@ -944,5 +946,4 @@ main() {
     fi
 }
 
-# --- executes the script ---
 main "$@"

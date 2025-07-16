@@ -6,7 +6,7 @@
 
 A comprehensive Bash script to monitor Docker containers. It checks container health, resource usage, and image updates, sending notifications about any issues it finds. The script is designed to be fast, efficient, and easily automated.
 
-### ✨ Features
+### Features
 
   - **Asynchronous Checks**: Uses `xargs` to run checks on multiple containers in parallel, making it significantly faster for hosts with many containers.
   - **Interactive Updates**: A special mode to scan for updates and let you choose which new images to pull.
@@ -24,7 +24,7 @@ A comprehensive Bash script to monitor Docker containers. It checks container he
 
 -----
 
-### ✅ Prerequisites
+### Prerequisites
 
 The script relies on a few common command-line tools:
 
@@ -43,7 +43,7 @@ sudo apt-get install -y skopeo jq coreutils gawk
 
 -----
 
-### 🚀 Installation
+### Installation
 
 #### 1\. Get the Script and Config File
 
@@ -82,13 +82,13 @@ Generate the hash of your downloaded script (`sha256sum container-monitor.sh`) a
 chmod +x container-monitor.sh
 ```
 
-#### 4\. Customize Configuration `config.sh`
+#### 4\. Customize Configuration Files
 
-Open `config.sh` and set your monitoring defaults, for main script settings like thresholds and notification channels.
+Open `config.sh` and `release_urls.conf` with a text editor to set your monitoring defaults and release note links.
 
-#### 5\. (Optional) Add Release Note URLs
-
-To see links to release notes when updates are available, edit and save `release_urls.conf` in the same directory as the script.g
+-   **`config.sh`**: For main script settings like thresholds and notification channels.
+ 
+-   **`release_urls.conf`**: To map container images to their official release notes page. The format is `image_name=url`.
 
 **Example `release_urls.conf` content:**
 
@@ -100,7 +100,7 @@ linuxserver/heimdall=https://github.com/linuxserver/Heimdall/releases
 
 -----
 
-### ⚙️ Configuration
+###  Configuration
 
 The script is configured by editing `config.sh` or by setting environment variables. Environment variables will always override settings from the config file.
 
@@ -125,7 +125,7 @@ The script is configured by editing `config.sh` or by setting environment variab
 -----
 
 
-### 🔔 Notifications
+### Notifications
 
 To receive alerts, configure a notification channel in `config.sh`.
 
@@ -134,7 +134,7 @@ To receive alerts, configure a notification channel in `config.sh`.
 
 -----
 
-### 🏃‍♀️ Usage
+### Usage
 
 #### Running Checks
 
@@ -171,7 +171,7 @@ To receive alerts, configure a notification channel in `config.sh`.
 
 -----
 
-### 🤖 Automation (Running as a Service)
+### Automation (Running as a Service)
 
 The script is designed to be run periodically by a scheduler.
 
@@ -220,7 +220,7 @@ sudo systemctl enable --now docker-monitor.timer
 
 -----
 
-### 📊 Example Summary Output
+### Example Summary Output
 
 ```
 [SUMMARY] -------------------------- Host System Stats ---------------------------
@@ -234,11 +234,11 @@ sudo systemctl enable --now docker-monitor.timer
 [SUMMARY] ------------------------------------------------------------------------
 ```
 
-### 📝 Logging
+### Logging
 
 All script output, including detailed checks, is logged to the file specified by `LOG_FILE` (default: `docker-monitor.log` in the script's directory). For long-term use, consider using `logrotate` to manage the log file size.
 
-### 🔧 Troubleshooting
+### Troubleshooting
 
   - **Permissions:** If you get "Permission denied" for Docker commands, ensure the user running the script can access the Docker socket (e.g., is in the `docker` group).
   - **Logs:** If the script doesn't behave as expected, check the `docker-monitor.log` file for detailed error messages.
