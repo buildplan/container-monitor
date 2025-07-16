@@ -919,24 +919,24 @@ perform_checks_for_container() {
 }
 
 # --- Main Execution ---
-
 main() {
+    # 1. Check for and offer to install any missing dependencies
     check_and_install_dependencies
+
+    # 2. Load all configuration from files and environment variables
     load_configuration
 
-    # --- Argument Parsing for --no-update flag ---
+    # 3. Handle the --no-update flag before doing anything else
     local run_update_check=true
-    declare -a args_without_no_update=()
+    declare -a initial_args=("$@")
     for arg in "$@"; do
         if [[ "$arg" == "--no-update" ]]; then
             run_update_check=false
-        else
-            args_without_no_update+=("$arg")
+            break
         fi
     done
-    set -- "${args_without_no_update[@]}" # Reset positional parameters
 
-    # --- Check for script updates (now happens before the header box) ---
+    # 4. Check for script updates if not skipped
     if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
         local latest_version
         latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
@@ -945,88 +945,84 @@ main() {
         fi
     fi
 
-    # --- Determine script mode based on arguments ---
-    if [[ " ${args_without_no_update[*]} " =~ " --interactive-update " ]]; then
+    # 5. Determine script mode before printing header
+    if [[ " ${initial_args[*]} " =~ " --interactive-update " ]]; then
         INTERACTIVE_UPDATE_MODE=true
     fi
-    if [[ " ${args_without_no_update[*]} " =~ " summary " ]]; then
+    if [[ " ${initial_args[*]} " =~ " summary " ]]; then
         SUMMARY_ONLY_MODE=true
     fi
 
-    # --- Print Header Box ---
+    # 6. Print the header box for manual runs
     if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
         print_header_box
     fi
 
-    # Re-enable local variables
+    # --- Initialize arrays for this run ---
     declare -a CONTAINERS_TO_CHECK=()
     declare -a WARNING_OR_ERROR_CONTAINERS=()
     declare -A CONTAINER_ISSUES_MAP
-
-    # --- Argument & Mode Parsing ---
     declare -a CONTAINERS_TO_EXCLUDE=()
-    declare -a new_args=()
+    declare -a remaining_args=()
     for arg in "$@"; do
         case "$arg" in
             --exclude=*)
                 local EXCLUDE_STR="${arg#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 ;;
+            # Ignore flags already processed
+            --no-update|--interactive-update|summary)
+                ;;
             *)
-                new_args+=("$arg")
+                remaining_args+=("$arg")
                 ;;
         esac
     done
-    set -- "${new_args[@]}"
+    set -- "${remaining_args[@]}"
 
-    if [[ "$1" == "--interactive-update" ]]; then
+    # --- Handle Different Execution Modes ---
+    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
         run_interactive_update_mode
         return 0
     fi
 
-    if [[ "$#" -gt 0 && "$1" == "summary" ]]; then SUMMARY_ONLY_MODE=true; shift; fi
-
-    if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-        if [ "$#" -gt 0 ]; then
-          case "$1" in
-            logs)
-              shift
-              local container_to_log="${1:-all}"
-              local filter_type="${2:-all}"
-
-              if [[ "$container_to_log" == "all" ]]; then
-                  echo "Please specify a container name to view its logs."
-                  return 1
-              fi
-
-              if [[ "$filter_type" == "errors" ]]; then
-                  echo "--- Showing errors for $container_to_log ---"
-                  docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
-              else
-                  echo "--- Showing logs for $container_to_log ---"
-                  docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
-              fi
-              return 0
-              ;;
-            save)
-              shift
-              if [[ "$1" == "logs" && -n "$2" ]]; then
-                local container_to_save="$2"
-                save_logs "$container_to_save"
-              else
-                echo "Usage: $0 save logs <container_name>"
-              fi
-              return 0
-              ;;
-            *)
-              CONTAINERS_TO_CHECK=("$@")
-              ;;
-          esac
+    if [ "$#" -gt 0 ]; then
+        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
+            case "$1" in
+                logs)
+                    shift
+                    local container_to_log="${1:-all}"
+                    local filter_type="${2:-all}"
+                    if [[ "$container_to_log" == "all" ]]; then
+                        echo "Please specify a container name to view its logs."; return 1
+                    fi
+                    if [[ "$filter_type" == "errors" ]]; then
+                        echo "--- Showing errors for $container_to_log ---"
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
+                    else
+                        echo "--- Showing logs for $container_to_log ---"
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+                    fi
+                    return 0
+                    ;;
+                save)
+                    shift
+                    if [[ "$1" == "logs" && -n "$2" ]]; then
+                        local container_to_save="$2"
+                        save_logs "$container_to_save"
+                    else
+                        echo "Usage: $0 save logs <container_name>"
+                    fi
+                    return 0
+                    ;;
+                *)
+                    CONTAINERS_TO_CHECK=("$@")
+                    ;;
+            esac
+        else
+            # If in summary mode, all remaining args are container names
+            CONTAINERS_TO_CHECK=("$@")
         fi
-    fi
-    # If in summary mode, remaining args are containers
-    if [ "$SUMMARY_ONLY_MODE" = "true" ] && [ "$#" -gt 0 ]; then
-        CONTAINERS_TO_CHECK=("$@")
     fi
 
     # --- Determine Containers to Monitor ---
