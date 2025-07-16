@@ -154,32 +154,51 @@ load_configuration() {
 # --- Functions ---
 
 print_header_box() {
-    # Prepare the lines of content
+    # --- Configuration for the box ---
+    local box_width=55
+    local border_color="$COLOR_CYAN"
+    local version_color="$COLOR_GREEN"
+    local date_color="$COLOR_RESET"
+    local update_color="$COLOR_YELLOW"
+
     local line1="Container Monitor ${VERSION}"
     local line2="Updated: ${VERSION_DATE}"
     local line3=""
     if [ "$UPDATE_SKIPPED" = true ]; then
-        line3="A new version is available. Run the script again to update."
+        line3="A new version is available to update"
     fi
 
-    # Find the length of the longest line
-    local max_len=${#line1}
-    if (( ${#line2} > max_len )); then max_len=${#line2}; fi
-    if (( ${#line3} > max_len )); then max_len=${#line3}; fi
+    print_centered_line() {
+        local text="$1"
+        local text_color="$2"
+        local text_len=${#text}
 
-    # Create the top/bottom border string
-    local border; border=$(printf '─%.0s' $(seq 1 "$((max_len + 2))"))
+        local padding_total=$((box_width - text_len))
+        local padding_left=$((padding_total / 2))
+        local padding_right=$((padding_total - padding_left))
 
-    # Print the box
-    echo -e "${COLOR_CYAN}┌${border}┐${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}│ ${COLOR_GREEN}$(printf "%-s" "$line1" | sed -e :a -e "s/^.\{1,$max_len\}$/& /;ta")${COLOR_CYAN} │${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}│ ${COLOR_RESET}$(printf "%-s" "$line2" | sed -e :a -e "s/^.\{1,$max_len\}$/& /;ta")${COLOR_CYAN} │${COLOR_RESET}"
+        printf "${border_color}║%*s%s%s%*s${border_color}║${COLOR_RESET}\n" \
+            "$padding_left" "" \
+            "${text_color}" "${text}" \
+            "$padding_right" ""
+    }
+
+    local border_char="═"
+    local top_border; top_border=$(printf '%0.s' "$border_char" | head -c "$box_width")
+
+    echo -e "${border_color}╔${top_border}╗${COLOR_RESET}"
+    print_centered_line "$line1" "$version_color"
+    print_centered_line "$line2" "$date_color"
+
     if [ -n "$line3" ]; then
-        echo -e "${COLOR_CYAN}├${border}┤${COLOR_RESET}"
-        echo -e "${COLOR_CYAN}│ ${COLOR_YELLOW}$(printf "%-s" "$line3" | sed -e :a -e "s/^.\{1,$max_len\}$/& /;ta")${COLOR_CYAN} │${COLOR_RESET}"
+        local separator_char="─"
+        local separator; separator=$(printf '%0.s' "$separator_char" | head -c "$box_width")
+        echo -e "${border_color}╠${separator}╣${COLOR_RESET}"
+        print_centered_line "$line3" "$update_color"
     fi
-    echo -e "${COLOR_CYAN}└${border}┘${COLOR_RESET}"
-    echo # Add a blank line for spacing
+
+    echo -e "${border_color}╚${top_border}╝${COLOR_RESET}"
+    echo
 }
 
 check_and_install_dependencies() {
