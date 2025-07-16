@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.20"
+VERSION="v0.21"
 VERSION_DATE="2025-07-16"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -102,6 +102,8 @@ NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 load_configuration() {
+    _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
+
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
             yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
@@ -110,12 +112,9 @@ load_configuration() {
         fi
     }
 
-    # Sets a final variable value based on the priority: ENV > YAML > Default
+    # Helper function to set a final variable value based on priority
     set_final_config() {
-        local var_name="$1"
-        local yaml_path="$2"
-        local default_value="$3"
-
+        local var_name="$1"; local yaml_path="$2"; local default_value="$3"
         local env_value; env_value=$(printenv "$var_name")
         local yaml_value; yaml_value=$(get_config_val "$yaml_path")
 
@@ -143,12 +142,10 @@ load_configuration() {
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 
     # Load the list of default containers from the config file if no ENV var is set for it
-    if [ -z "$CONTAINER_NAMES" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
-        mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$SCRIPT_DIR/config.yml")
+    if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
+        mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
-
 }
-
 
 # --- Functions ---
 
