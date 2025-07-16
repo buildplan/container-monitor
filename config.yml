@@ -22,6 +22,9 @@ notifications:
     server_url: "https://ntfy.sh"
     topic: "your_ntfy_topic_here"
     access_token: ""
+    priority: 3  # 1=min, 3=default, 4=high, 5=urgent
+    icon_url: "https://cdn.jsdelivr.net/gh/selfhst/icons/png/docker.png"
+    click_url: "" # Optional: e.g., "http://your-server:9000" to open a dashboard
 
 containers:
   # Add the names of containers to monitor by default
