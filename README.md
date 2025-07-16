@@ -3,66 +3,57 @@
 [![Shell Script Linting](https://github.com/buildplan/container-monitor/actions/workflows/lint.yml/badge.svg)](https://github.com/buildplan/container-monitor/actions/workflows/lint.yml)
 [![Test Script Execution](https://github.com/buildplan/container-monitor/actions/workflows/test-execution.yml/badge.svg)](https://github.com/buildplan/container-monitor/actions/workflows/test-execution.yml)
 
-
 A comprehensive Bash script to monitor Docker containers. It checks container health, resource usage, and image updates, sending notifications about any issues it finds. The script is designed to be fast, efficient, and easily automated.
 
 ### Features
 
-  - **Asynchronous Checks**: Uses `xargs` to run checks on multiple containers in parallel, making it significantly faster for hosts with many containers.
-  - **Interactive Updates**: A special mode to scan for updates and let you choose which new images to pull.
-  - **Image Update Checks**: Uses `skopeo` to see if newer versions of your container images are available.
-  - **Release Note Integration**: Displays a direct link to release notes when an update is available, making it easy to see what's new.
-  - **Container Health**: Checks running status, health checks (`healthy`/`unhealthy`), and restart counts.
-  - **Resource Monitoring**: Monitors CPU and Memory usage against configurable thresholds.
-  - **Disk Usage**: Checks disk space usage for container volumes and bind mounts.
-  - **Network Health**: Checks for network errors and packet drops on container interfaces.
-  - **Log Scanning**: Scans recent container logs for keywords like `error`, `panic`, and `fatal`.
+  - **Intelligent Dependency Checking**: Automatically detects missing dependencies and offers to install them on supported systems (Debian, Ubuntu, Fedora, etc.).
+  - **Asynchronous Checks**: Uses `xargs` to run checks on multiple containers in parallel for faster execution.
+  - **Advanced Update Detection**: Uses `skopeo` to check for new image versions for both `:latest` and version-pinned tags.
+  - **Release Note Integration**: Displays a direct link to release notes when an update is available.
+  - **Interactive Updates**: A special mode (`--interactive-update`) to scan for all available updates and let you choose which new images to pull.
+  - **Comprehensive Health Monitoring**: Checks container status, health checks (`healthy`/`unhealthy`), and restart counts.
+  - **Resource & Log Scanning**: Monitors CPU, memory, disk usage, and network errors against configurable thresholds, and scans logs for error keywords.
   - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
-  - **Flexible Notifications**: Sends alerts for any detected issues to **Discord** or a self-hosted **ntfy** server.
-  - **Informative Progress Bar**: Displays a fancy, color-coded progress bar showing the percentage complete, elapsed time, and a spinner during interactive runs.
-  - **Summary Report**: Provides a final summary with host-level stats and a list of containers with issues, categorized with emojis for quick identification.
+  - **Flexible Notifications**: Sends alerts to **Discord** or a self-hosted **ntfy** server with the hostname included.
+  - **Polished Interface**: Displays an informative header box and a progress bar during manual runs.
+  - **Summary Report**: Provides a final summary with host-level stats and a list of containers with issues.
 
 -----
 
 ### Prerequisites
 
-The script relies on a few common command-line tools:
+The script requires a few common command-line tools. However, it includes a smart setup process to help you install them.
 
   - `docker`
   - `jq`
+  - `yq`
   - `skopeo`
+  - `gawk`
   - `coreutils` (provides `timeout`)
-  - `gawk` (provides `awk`)
+  - `wget`
 
-For **Debian-based systems (e.g., Ubuntu)**, you can install them using:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y skopeo jq coreutils gawk
-```
+When you first run the script, it will check for these dependencies. If any are missing, it will offer to automatically install them for you. For complex dependencies like `docker`, it will guide you with instructions.
 
 -----
 
 ### Installation
 
-#### 1\. Get the Script and Config File
+#### 1\. Get the Project Files
+
+Download the main script and the new, simplified YAML configuration file.
 
 ```bash
 # Download the main script
 wget https://github.com/buildplan/container-monitor/raw/main/container-monitor.sh
 
-# Download the template config file
-wget https://github.com/buildplan/container-monitor/raw/main/config.sh
-
-# Download example release_urls.conf - populate this with repo relese notes URLs
-wget https://github.com/buildplan/container-monitor/raw/main/release_urls.conf
+# Download the template configuration file
+wget https://github.com/buildplan/container-monitor/raw/main/config.yml
 ```
 
 #### 2\. Verify Script Integrity (Recommended)
 
-To ensure the script has not been altered, you can verify its SHA256 checksum.
-
-**Option A: Automatic Check**
+To ensure the script is authentic, verify its SHA256 checksum.
 
 ```bash
 # Download the official checksum file
@@ -72,65 +63,56 @@ wget https://github.com/buildplan/container-monitor/raw/main/container-monitor.s
 sha256sum -c container-monitor.sh.sha256
 ```
 
-**Option B: Manual Check**
-
-Generate the hash of your downloaded script (`sha256sum container-monitor.sh`) and compare it to the official hash provided in the repository.
-
 #### 3\. Make it Executable
 
 ```bash
 chmod +x container-monitor.sh
 ```
 
-#### 4\. Customize Configuration Files
+#### 4\. Configure the Script
 
-Open `config.sh` and `release_urls.conf` with a text editor to set your monitoring defaults and release note links.
-
--   **`config.sh`**: For main script settings like thresholds and notification channels.
- 
--   **`release_urls.conf`**: To map container images to their official release notes page. The format is `image_name=url`.
-
-**Example `release_urls.conf` content:**
-
-```
-# Format: <docker_image_name_without_tag>=<url_to_release_notes>
-portainer/portainer-ce=https://github.com/portainer/portainer/releases
-linuxserver/heimdall=https://github.com/linuxserver/Heimdall/releases
-```
+Open `config.yml` with a text editor to set your monitoring defaults, notification channels, and release note URLs.
 
 -----
 
-###  Configuration
+### Configuration
 
-The script is configured by editing `config.sh` or by setting environment variables. Environment variables will always override settings from the config file.
+The script is configured through the `config.yml` file or by setting environment variables. Environment variables will always override settings from the YAML file.
 
-| Environment Variable | `config.sh` Variable | Default | Description |
-|---|---|---|---|
-| `CONTAINER_NAMES` | `CONTAINER_NAMES_DEFAULT` (array) | (empty) | Comma-separated string of container names to monitor. |
-| `LOG_LINES_TO_CHECK` | `LOG_LINES_TO_CHECK_DEFAULT` | `20` | Number of log lines to scan for errors. |
-| `CPU_WARNING_THRESHOLD` | `CPU_WARNING_THRESHOLD_DEFAULT` | `80` | CPU usage % to trigger a warning. |
-| `MEMORY_WARNING_THRESHOLD`| `MEMORY_WARNING_THRESHOLD_DEFAULT`| `80` | Memory usage % to trigger a warning. |
-| `DISK_SPACE_THRESHOLD` | `DISK_SPACE_THRESHOLD_DEFAULT` | `80` | Disk usage % on a container mount to trigger a warning. |
-| `NETWORK_ERROR_THRESHOLD`| `NETWORK_ERROR_THRESHOLD_DEFAULT`| `10` | Number of network errors/drops on an interface. |
-| `HOST_DISK_CHECK_FILESYSTEM`| `HOST_DISK_CHECK_FILESYSTEM_DEFAULT` | `/` | Host filesystem path to check for the summary. |
-| `LOG_FILE` | `LOG_FILE_DEFAULT` | (script dir) | Path to the output log file. |
-| `NOTIFICATION_CHANNEL`| `NOTIFICATION_CHANNEL_DEFAULT`| `none` | Notification channel: `"discord"`, `"ntfy"`, or `"none"`. |
-| `DISCORD_WEBHOOK_URL`| `DISCORD_WEBHOOK_URL_DEFAULT`| `...` | Your Discord webhook URL. |
-| `NTFY_SERVER_URL` | `NTFY_SERVER_URL_DEFAULT` | `https://ntfy.sh`| URL of your ntfy server. |
-| `NTFY_TOPIC` | `NTFY_TOPIC_DEFAULT` | `...` | Your ntfy topic. |
-| `NTFY_ACCESS_TOKEN` | `NTFY_ACCESS_TOKEN_DEFAULT` | (empty) | Access token for private ntfy topics. |
+#### The `config.yml` File
 
-  - **Note**: You can list Docker container names with `docker ps -a --format '{{.Names}}'`. Then, edit `config.sh` to add the names of the containers you want to monitor by default to the `CONTAINER_NAMES_DEFAULT` array.
+This is the central place for all settings. It is structured into sections for clarity.
 
------
+**Example `config.yml`:**
 
+```yaml
+general:
+  log_file: "docker-monitor.log"
 
-### Notifications
+notifications:
+  channel: "discord"
+  discord:
+    webhook_url: "https://discord.com/api/webhooks/your_hook_here"
 
-To receive alerts, configure a notification channel in `config.sh`.
+containers:
+  monitor_defaults:
+    - "portainer"
+    - "traefik"
+  release_urls:
+    portainer/portainer-ce: "https://github.com/portainer/portainer/releases"
+```
 
-  - **For Discord**: Set `NOTIFICATION_CHANNEL_DEFAULT="discord"` and provide your `DISCORD_WEBHOOK_URL_DEFAULT`.
-  - **For Ntfy**: Set `NOTIFICATION_CHANNEL_DEFAULT="ntfy"` and provide your `NTFY_SERVER_URL_DEFAULT` and `NTFY_TOPIC_DEFAULT`. Use `NTFY_ACCESS_TOKEN_DEFAULT` for private topics.
+#### Environment Variables
+
+You can override any setting from the YAML file by exporting an environment variable. The variable name is the uppercase version of the YAML path.
+
+| Environment Variable | YAML Path | Default |
+|---|---|---|
+| `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `20` |
+| `CPU_WARNING_THRESHOLD` | `.thresholds.cpu_warning` | `80` |
+| `NOTIFICATION_CHANNEL` | `.notifications.channel` | `none`|
+| `DISCORD_WEBHOOK_URL`| `.notifications.discord.webhook_url`| `...` |
+| `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
 
 -----
 
@@ -138,15 +120,12 @@ To receive alerts, configure a notification channel in `config.sh`.
 
 #### Running Checks
 
-  - **Run a full check with detailed output:**
+  - **Run a standard check:**
     `./container-monitor.sh`
-
   - **Run a check on specific containers:**
-    `./container-monitor.sh traefik crowdsec`
-
-  - **Run a check excluding specific containers:**
-    `./container-monitor.sh --exclude=portainer,unifi-controller`
-
+    `./container-monitor.sh portainer traefik`
+  - **Run a check excluding containers:**
+    `./container-monitor.sh --exclude=watchtower`
   - **Run in Summary-Only Mode (for automation):**
     `./container-monitor.sh summary`
 
@@ -154,33 +133,20 @@ To receive alerts, configure a notification channel in `config.sh`.
 
   - **Interactively update containers:**
     `./container-monitor.sh --interactive-update`
-
   - **Skip the self-update check:**
     `./container-monitor.sh --no-update`
-
-#### Viewing Logs
-
-  - **Show recent logs for a specific container:**
-    `./container-monitor.sh logs traefik`
-
-  - **Show only error-related lines from logs:**
-    `./container-monitor.sh logs errors traefik`
-
-  - **Save full logs to a file:**
-    `./container-monitor.sh save logs traefik`
 
 -----
 
 ### Automation (Running as a Service)
 
-The script is designed to be run periodically by a scheduler.
+For automated execution, using `summary` and `--no-update` is recommended.
 
-#### Option A: systemd Timer Setup (Recommended)
+#### systemd Timer Setup (Recommended)
 
-Create two files in `/etc/systemd/system/`: `docker-monitor.service` and `docker-monitor.timer`.
+Create `/etc/systemd/system/docker-monitor.service` and `docker-monitor.timer`.
 
-  - `docker-monitor.service`:
-
+  - **`docker-monitor.service`**:
     ```ini
     [Unit]
     Description=Run Docker Container Monitor Script
@@ -189,9 +155,7 @@ Create two files in `/etc/systemd/system/`: `docker-monitor.service` and `docker
     Type=oneshot
     ExecStart=/path/to/your/container-monitor.sh --no-update summary
     ```
-
-  - `docker-monitor.timer`:
-
+  - **`docker-monitor.timer`**:
     ```ini
     [Unit]
     Description=Run Docker Container Monitor every 6 hours
@@ -204,19 +168,7 @@ Create two files in `/etc/systemd/system/`: `docker-monitor.service` and `docker
     WantedBy=timers.target
     ```
 
-Then enable and start the timer:
-
-```bash
-sudo systemctl enable --now docker-monitor.timer
-```
-
-#### Option B: Cron Job Setup
-
-1.  Open your crontab: `crontab -e`
-2.  Add the following line to run the script every 6 hours:
-    ```crontab
-    0 */6 * * * /path/to/your/container-monitor.sh --no-update summary >/dev/null 2>&1
-    ```
+Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
 
 -----
 
@@ -228,7 +180,7 @@ sudo systemctl enable --now docker-monitor.timer
 [SUMMARY]   Host Memory Usage: Total: 1967MB, Used: 848MB (43%), Free: 132MB
 [SUMMARY] ------------------- Summary of Container Issues Found --------------------
 [SUMMARY] The following containers have warnings or errors:
-[WARNING] - portainer 🔄 (Issues: Update available: 2.20.1 | Notes: https://github.com/portainer/portainer/releases)
+[WARNING] - portainer 🔄 (Issues: Update available: 2.20.1, Notes: https://github.com/portainer/portainer/releases)
 [WARNING] - dozzle 📈 (Issues: Resources)
 [WARNING] - beszel-agent 📜 (Issues: Logs)
 [SUMMARY] ------------------------------------------------------------------------
@@ -236,12 +188,10 @@ sudo systemctl enable --now docker-monitor.timer
 
 ### Logging
 
-All script output, including detailed checks, is logged to the file specified by `LOG_FILE` (default: `docker-monitor.log` in the script's directory). For long-term use, consider using `logrotate` to manage the log file size.
+All script output, including detailed checks from non-summary runs, is logged to the file specified in `config.yml` (default: `docker-monitor.log`). For long-term use, consider using `logrotate` to manage the log file size.
 
 ### Troubleshooting
 
-  - **Permissions:** If you get "Permission denied" for Docker commands, ensure the user running the script can access the Docker socket (e.g., is in the `docker` group).
-  - **Logs:** If the script doesn't behave as expected, check the `docker-monitor.log` file for detailed error messages.
-  - **Dependencies:** Verify that `docker` is running and that `jq`, `skopeo`, `awk`, and `timeout` are installed and in the system's `PATH`.
-  - **Container Names:** Double-check that container names in your configuration exactly match the output of `docker ps`.
-  - skopeo authentication: If you're checking private registries, make sure you’ve configured skopeo authentication via `/.docker/config.json`
+  - **Permissions:** If you get "Permission denied," ensure the user running the script can access the Docker socket (e.g., is in the `docker` group).
+  - **Logs:** If the script doesn't behave as expected, check the log file for detailed error messages.
+  - **Dependencies:** Run the script manually. Its built-in dependency checker will tell you if any required tools like `jq` or `yq` are missing and offer to install them.

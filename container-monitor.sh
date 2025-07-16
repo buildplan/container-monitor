@@ -39,28 +39,31 @@
 # Prerequisites:
 #   - Docker
 #   - jq (for processing JSON output from docker inspect and docker stats)
+#   - yq (for yaml config file)
 #   - skopeo (for checking for container image updates)
 #   - bc or awk (awk is used in this script for float comparisons to reduce dependencies)
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.11"
+VERSION="v0.20"
+VERSION_DATE="2025-07-16"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
 # --- ANSI Color Codes ---
-COLOR_RESET="\033[0m"
-COLOR_RED="\033[0;31m"
-COLOR_GREEN="\033[0;32m"
-COLOR_YELLOW="\033[0;33m"
-COLOR_CYAN="\033[0;36m"
-COLOR_MAGENTA="\033[0;35m"
-COLOR_BLUE="\033[0;34m"
+COLOR_RESET=$'\033[0m'
+COLOR_RED=$'\033[0;31m'
+COLOR_GREEN=$'\033[0;32m'
+COLOR_YELLOW=$'\033[0;33m'
+COLOR_CYAN=$'\033[0;36m'
+COLOR_MAGENTA=$'\033[0;35m'
+COLOR_BLUE=$'\033[0;34m'
 
 # --- Global Flags ---
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
 INTERACTIVE_UPDATE_MODE=false
+UPDATE_SKIPPED=false
 
 # --- Get path to script directory ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -98,55 +101,229 @@ NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
-# --- Source Configuration File (config.sh) ---
-_CONFIG_FILE_PATH="$SCRIPT_DIR/config.sh"
-if [ -f "$_CONFIG_FILE_PATH" ]; then
-    source "$_CONFIG_FILE_PATH"
-    LOG_LINES_TO_CHECK="${LOG_LINES_TO_CHECK_DEFAULT:-$LOG_LINES_TO_CHECK}"
-    CHECK_FREQUENCY_MINUTES="${CHECK_FREQUENCY_MINUTES_DEFAULT:-$CHECK_FREQUENCY_MINUTES}"
-    LOG_FILE="${LOG_FILE_DEFAULT:-$LOG_FILE}"
-    CPU_WARNING_THRESHOLD="${CPU_WARNING_THRESHOLD_DEFAULT:-$CPU_WARNING_THRESHOLD}"
-    MEMORY_WARNING_THRESHOLD="${MEMORY_WARNING_THRESHOLD_DEFAULT:-$MEMORY_WARNING_THRESHOLD}"
-    DISK_SPACE_THRESHOLD="${DISK_SPACE_THRESHOLD_DEFAULT:-$DISK_SPACE_THRESHOLD}"
-    NETWORK_ERROR_THRESHOLD="${NETWORK_ERROR_THRESHOLD_DEFAULT:-$NETWORK_ERROR_THRESHOLD}"
-    HOST_DISK_CHECK_FILESYSTEM="${HOST_DISK_CHECK_FILESYSTEM_DEFAULT:-$HOST_DISK_CHECK_FILESYSTEM}"
-    NOTIFICATION_CHANNEL="${NOTIFICATION_CHANNEL_DEFAULT:-$NOTIFICATION_CHANNEL}"
-    DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL_DEFAULT:-$DISCORD_WEBHOOK_URL}"
-    NTFY_SERVER_URL="${NTFY_SERVER_URL_DEFAULT:-$NTFY_SERVER_URL}"
-    NTFY_TOPIC="${NTFY_TOPIC_DEFAULT:-$NTFY_TOPIC}"
-    NTFY_ACCESS_TOKEN="${NTFY_ACCESS_TOKEN_DEFAULT:-$NTFY_ACCESS_TOKEN}"
-    if declare -p CONTAINER_NAMES_DEFAULT &>/dev/null && [[ "$(declare -p CONTAINER_NAMES_DEFAULT)" == "declare -a"* ]]; then
-        if [ ${#CONTAINER_NAMES_DEFAULT[@]} -gt 0 ]; then
-            CONTAINER_NAMES_FROM_CONFIG_FILE=("${CONTAINER_NAMES_DEFAULT[@]}")
+load_configuration() {
+    get_config_val() {
+        if [ -f "$_CONFIG_FILE_PATH" ]; then
+            yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
+        else
+            echo ""
         fi
+    }
+
+    # Sets a final variable value based on the priority: ENV > YAML > Default
+    set_final_config() {
+        local var_name="$1"
+        local yaml_path="$2"
+        local default_value="$3"
+
+        local env_value; env_value=$(printenv "$var_name")
+        local yaml_value; yaml_value=$(get_config_val "$yaml_path")
+
+        if [ -n "$env_value" ]; then
+            printf -v "$var_name" '%s' "$env_value"
+        elif [ -n "$yaml_value" ]; then
+            printf -v "$var_name" '%s' "$yaml_value"
+        else
+            printf -v "$var_name" '%s' "$default_value"
+        fi
+    }
+
+    # Set all configuration variables
+    set_final_config "LOG_LINES_TO_CHECK"           ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
+    set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
+    set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
+    set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
+    set_final_config "DISK_SPACE_THRESHOLD"          ".thresholds.disk_space"                "$_SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD"
+    set_final_config "NETWORK_ERROR_THRESHOLD"       ".thresholds.network_error"             "$_SCRIPT_DEFAULT_NETWORK_ERROR_THRESHOLD"
+    set_final_config "HOST_DISK_CHECK_FILESYSTEM"    ".host_system.disk_check_filesystem"    "$_SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM"
+    set_final_config "NOTIFICATION_CHANNEL"          ".notifications.channel"                "$_SCRIPT_DEFAULT_NOTIFICATION_CHANNEL"
+    set_final_config "DISCORD_WEBHOOK_URL"           ".notifications.discord.webhook_url"    "$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL"
+    set_final_config "NTFY_SERVER_URL"               ".notifications.ntfy.server_url"        "$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
+    set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
+    set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
+
+    # Load the list of default containers from the config file if no ENV var is set for it
+    if [ -z "$CONTAINER_NAMES" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
+        mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$SCRIPT_DIR/config.yml")
     fi
-else
-    echo -e "${COLOR_YELLOW}[WARNING]${COLOR_RESET} Configuration file '$_CONFIG_FILE_PATH' not found. Using script defaults or environment variables."
-fi
 
-# --- Override with Environment Variables ---
-LOG_LINES_TO_CHECK="${LOG_LINES_TO_CHECK:-$LOG_LINES_TO_CHECK}"
-CHECK_FREQUENCY_MINUTES="${CHECK_FREQUENCY_MINUTES:-$CHECK_FREQUENCY_MINUTES}"
-LOG_FILE="${LOG_FILE:-$LOG_FILE}"
-CPU_WARNING_THRESHOLD="${CPU_WARNING_THRESHOLD:-$CPU_WARNING_THRESHOLD}"
-MEMORY_WARNING_THRESHOLD="${MEMORY_WARNING_THRESHOLD:-$MEMORY_WARNING_THRESHOLD}"
-DISK_SPACE_THRESHOLD="${DISK_SPACE_THRESHOLD:-$DISK_SPACE_THRESHOLD}"
-NETWORK_ERROR_THRESHOLD="${NETWORK_ERROR_THRESHOLD:-$NETWORK_ERROR_THRESHOLD}"
-HOST_DISK_CHECK_FILESYSTEM="${HOST_DISK_CHECK_FILESYSTEM:-$HOST_DISK_CHECK_FILESYSTEM}"
-NOTIFICATION_CHANNEL="${NOTIFICATION_CHANNEL:-$NOTIFICATION_CHANNEL}"
-DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-$DISCORD_WEBHOOK_URL}"
-NTFY_SERVER_URL="${NTFY_SERVER_URL:-$NTFY_SERVER_URL}"
-NTFY_TOPIC="${NTFY_TOPIC:-$NTFY_TOPIC}"
-NTFY_ACCESS_TOKEN="${NTFY_ACCESS_TOKEN:-$NTFY_ACCESS_TOKEN}"
+}
 
-# --- Prerequisite Checks ---
-if ! command -v docker &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} Docker command not found." >&2; exit 1; fi
-if ! command -v jq &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} jq command not found." >&2; exit 1; fi
-if ! command -v skopeo &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} skopeo not found. Update checks will be skipped." >&2; fi
-if ! command -v awk &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} awk command not found." >&2; exit 1; fi
-if ! command -v timeout &>/dev/null; then echo -e "${COLOR_RED}[FATAL]${COLOR_RESET} timeout command not found." >&2; exit 1; fi
 
 # --- Functions ---
+
+print_header_box() {
+    # --- Configuration for the box ---
+    local box_width=55
+    local border_color="$COLOR_CYAN"
+    local version_color="$COLOR_GREEN"
+    local date_color="$COLOR_RESET"
+    local update_color="$COLOR_YELLOW"
+
+    # --- Prepare content lines ---
+    local line1="Container Monitor ${VERSION}"
+    local line2="Updated: ${VERSION_DATE}"
+    local line3=""
+    if [ "$UPDATE_SKIPPED" = true ]; then
+        line3="A new version is available to update"
+    fi
+
+    # --- Helper function to print a centered line within the box ---
+    print_centered_line() {
+        local text="$1"
+        local text_color="$2"
+        local text_len=${#text}
+
+        # Calculate padding needed on each side to center the text
+        local padding_total=$((box_width - text_len))
+        local padding_left=$((padding_total / 2))
+        local padding_right=$((padding_total - padding_left))
+
+        # Print the fully constructed line
+        printf "${border_color}║%*s%s%s%*s${border_color}║${COLOR_RESET}\n" \
+            "$padding_left" "" \
+            "${text_color}" "${text}" \
+            "$padding_right" ""
+    }
+
+    # --- Draw the box ---
+    local border_char="═"
+    local top_border=""
+    for ((i=0; i<box_width; i++)); do top_border+="$border_char"; done
+
+    echo -e "${border_color}╔${top_border}╗${COLOR_RESET}"
+    print_centered_line "$line1" "$version_color"
+    print_centered_line "$line2" "$date_color"
+
+    # If the optional update line exists, print it
+    if [ -n "$line3" ]; then
+        local separator_char="─"
+        local separator=""
+        for ((i=0; i<box_width; i++)); do separator+="$separator_char"; done
+        echo -e "${border_color}╠${separator}╣${COLOR_RESET}"
+        print_centered_line "$line3" "$update_color"
+    fi
+
+    echo -e "${border_color}╚${top_border}╝${COLOR_RESET}"
+    echo
+}
+
+check_and_install_dependencies() {
+    local missing_pkgs=()
+    local manual_install_needed=false
+    local yq_missing=false
+    local pkg_manager=""
+    local arch=""
+
+    # 1. Determine OS Package Manager
+    if command -v apt-get &>/dev/null; then
+        pkg_manager="apt"
+    elif command -v dnf &>/dev/null; then
+        pkg_manager="dnf"
+    elif command -v yum &>/dev/null; then
+        pkg_manager="yum"
+    fi
+
+    # 2. Determine Architecture for yq
+    case "$(uname -m)" in
+        x86_64) arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *) arch="unsupported" ;;
+    esac
+
+    # 3. Define dependencies
+    declare -A deps=(
+        [jq]=jq
+        [skopeo]=skopeo
+        [awk]=gawk
+        [timeout]=coreutils
+        [wget]=wget
+    )
+
+    print_message "Checking for required command-line tools..." "INFO"
+
+    # Check for ALL dependencies
+
+    if ! command -v docker &>/dev/null; then
+        print_message "Docker is not installed. This is a critical dependency. Please follow the official instructions at https://docs.docker.com/engine/install/" "DANGER"
+        manual_install_needed=true
+    fi
+
+    if ! command -v yq &>/dev/null; then
+        yq_missing=true
+    fi
+
+    for cmd in "${!deps[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_pkgs+=("${deps[$cmd]}")
+        fi
+    done
+
+    # Offer to install packages via the system's package manager
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        print_message "The following required packages can be installed via your package manager: ${missing_pkgs[*]}" "WARNING"
+        if [ -n "$pkg_manager" ]; then
+            read -rp "Would you like to attempt to install them now? (y/n): " response
+            if [[ "$response" =~ ^[yY]$ ]]; then
+                print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
+                local install_cmd
+                if [ "$pkg_manager" == "apt" ]; then
+                    install_cmd="sudo apt-get update && sudo apt-get install -y"
+                else
+                    install_cmd="sudo $pkg_manager install -y"
+                fi
+
+                if eval "$install_cmd ${missing_pkgs[*]}"; then
+                    print_message "Package manager dependencies installed successfully." "GOOD"
+                else
+                    print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                    exit 1
+                fi
+            else
+                print_message "Installation cancelled. Please install all dependencies manually." "DANGER"
+                exit 1
+            fi
+        else
+            print_message "No supported package manager (apt/dnf/yum) found. Please install packages manually." "DANGER"
+            exit 1
+        fi
+    fi
+
+    # Offer to download and install yq if it was missing
+    if [ "$yq_missing" = true ]; then
+        print_message "yq is not installed. It is required for parsing config.yml." "WARNING"
+        if [ "$arch" == "unsupported" ]; then
+            print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
+            manual_install_needed=true
+        else
+            read -rp "Would you like to download the latest version for your architecture ($arch) now? (y/n): " response
+            if [[ "$response" =~ ^[yY]$ ]]; then
+                print_message "Attempting to download yq with 'sudo wget'... You may be prompted for your password." "INFO"
+                local yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch}"
+                if sudo wget "$yq_url" -O /usr/bin/yq && sudo chmod +x /usr/bin/yq; then
+                    print_message "yq installed successfully to /usr/bin/yq." "GOOD"
+                else
+                    print_message "Failed to download or install yq. Please install it manually." "DANGER"
+                    manual_install_needed=true
+                fi
+            else
+                print_message "Installation cancelled. Please install yq manually." "DANGER"
+                manual_install_needed=true
+            fi
+        fi
+    fi
+
+    # Exit if manual installations are still required
+    if [ "$manual_install_needed" = true ]; then
+        print_message "Please address the manually installed dependencies listed above before running the script again." "DANGER"
+        exit 1
+    fi
+
+    # If we get here, all dependencies are met
+    if [ "$yq_missing" = false ] && [ ${#missing_pkgs[@]} -eq 0 ]; then
+         print_message "All required dependencies are installed." "GOOD"
+    fi
+}
 
 print_message() {
     local message="$1"
@@ -256,6 +433,7 @@ self_update() {
     echo "A new version of this script is available. Would you like to update now? (y/n)"
     read -r response
     if [[ ! "$response" =~ ^[yY]$ ]]; then
+        UPDATE_SKIPPED=true
         return
     fi
 
@@ -463,10 +641,13 @@ check_for_updates() {
 
     get_release_url() {
         local image_to_check="$1"
-	local url_conf_file; url_conf_file="$SCRIPT_DIR/release_urls.conf"
-        if [ -f "$url_conf_file" ]; then
-            grep "^${image_to_check}=" "$url_conf_file" | cut -d'=' -f2-
+        local config_file="$SCRIPT_DIR/config.yml"
+
+        if [ ! -f "$config_file" ]; then
+            return
         fi
+
+        yq e ".containers.release_urls.\"${image_to_check}\" // \"\"" "$config_file"
     }
 
     # 4. Handle 'latest' tag by comparing digests
@@ -738,86 +919,110 @@ perform_checks_for_container() {
 }
 
 # --- Main Execution ---
-
 main() {
-    # Re-enable local variables
+    # 1. Check for and offer to install any missing dependencies
+    check_and_install_dependencies
+
+    # 2. Load all configuration from files and environment variables
+    load_configuration
+
+    # 3. Handle the --no-update flag before doing anything else
+    local run_update_check=true
+    declare -a initial_args=("$@")
+    for arg in "$@"; do
+        if [[ "$arg" == "--no-update" ]]; then
+            run_update_check=false
+            break
+        fi
+    done
+
+    # 4. Check for script updates if not skipped
+    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
+        local latest_version
+        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
+            self_update
+        fi
+    fi
+
+    # 5. Determine script mode before printing header
+    if [[ " ${initial_args[*]} " =~ " --interactive-update " ]]; then
+        INTERACTIVE_UPDATE_MODE=true
+    fi
+    if [[ " ${initial_args[*]} " =~ " summary " ]]; then
+        SUMMARY_ONLY_MODE=true
+    fi
+
+    # 6. Print the header box for manual runs
+    if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
+        print_header_box
+    fi
+
+    # --- Initialize arrays for this run ---
     declare -a CONTAINERS_TO_CHECK=()
     declare -a WARNING_OR_ERROR_CONTAINERS=()
     declare -A CONTAINER_ISSUES_MAP
-
-    # --- Argument & Mode Parsing ---
     declare -a CONTAINERS_TO_EXCLUDE=()
-    declare -a new_args=()
+    declare -a remaining_args=()
     for arg in "$@"; do
         case "$arg" in
             --exclude=*)
                 local EXCLUDE_STR="${arg#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 ;;
+            # Ignore flags already processed
+            --no-update|--interactive-update|summary)
+                ;;
             *)
-                new_args+=("$arg")
+                remaining_args+=("$arg")
                 ;;
         esac
     done
-    set -- "${new_args[@]}"
+    set -- "${remaining_args[@]}"
 
-    local run_update_check=true
-    if [[ "$1" == "--no-update" ]]; then run_update_check=false; shift; fi
-
-    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
-        local latest_version
-        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
-        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then self_update; fi
-    fi
-
-    if [[ "$1" == "--interactive-update" ]]; then
+    # --- Handle Different Execution Modes ---
+    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
         run_interactive_update_mode
         return 0
     fi
 
-    if [[ "$#" -gt 0 && "$1" == "summary" ]]; then SUMMARY_ONLY_MODE=true; shift; fi
-
-    if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-        if [ "$#" -gt 0 ]; then
-          case "$1" in
-            logs)
-              shift
-              local container_to_log="${1:-all}"
-              local filter_type="${2:-all}"
-
-              if [[ "$container_to_log" == "all" ]]; then
-                  echo "Please specify a container name to view its logs."
-                  return 1
-              fi
-
-              if [[ "$filter_type" == "errors" ]]; then
-                  echo "--- Showing errors for $container_to_log ---"
-                  docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
-              else
-                  echo "--- Showing logs for $container_to_log ---"
-                  docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
-              fi
-              return 0
-              ;;
-            save)
-              shift
-              if [[ "$1" == "logs" && -n "$2" ]]; then
-                local container_to_save="$2"
-                save_logs "$container_to_save"
-              else
-                echo "Usage: $0 save logs <container_name>"
-              fi
-              return 0
-              ;;
-            *)
-              CONTAINERS_TO_CHECK=("$@")
-              ;;
-          esac
+    if [ "$#" -gt 0 ]; then
+        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
+            case "$1" in
+                logs)
+                    shift
+                    local container_to_log="${1:-all}"
+                    local filter_type="${2:-all}"
+                    if [[ "$container_to_log" == "all" ]]; then
+                        echo "Please specify a container name to view its logs."; return 1
+                    fi
+                    if [[ "$filter_type" == "errors" ]]; then
+                        echo "--- Showing errors for $container_to_log ---"
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
+                    else
+                        echo "--- Showing logs for $container_to_log ---"
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+                    fi
+                    return 0
+                    ;;
+                save)
+                    shift
+                    if [[ "$1" == "logs" && -n "$2" ]]; then
+                        local container_to_save="$2"
+                        save_logs "$container_to_save"
+                    else
+                        echo "Usage: $0 save logs <container_name>"
+                    fi
+                    return 0
+                    ;;
+                *)
+                    CONTAINERS_TO_CHECK=("$@")
+                    ;;
+            esac
+        else
+            # If in summary mode, all remaining args are container names
+            CONTAINERS_TO_CHECK=("$@")
         fi
-    fi
-    # If in summary mode, remaining args are containers
-    if [ "$SUMMARY_ONLY_MODE" = "true" ] && [ "$#" -gt 0 ]; then
-        CONTAINERS_TO_CHECK=("$@")
     fi
 
     # --- Determine Containers to Monitor ---
