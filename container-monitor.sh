@@ -183,68 +183,119 @@ print_header_box() {
 }
 
 check_and_install_dependencies() {
-    local missing_packages=()
-    local os_id=""
+    local missing_pkgs=()
+    local manual_install_needed=false
+    local yq_missing=false
+    local pkg_manager=""
+    local arch=""
 
-    # Check for /etc/os-release to determine the OS
-    if [ -f /etc/os-release ]; then
-        os_id=$(grep -E '^ID=' /etc/os-release | cut -d'=' -f2)
+    # 1. Determine OS Package Manager
+    if command -v apt-get &>/dev/null; then
+        pkg_manager="apt"
+    elif command -v dnf &>/dev/null; then
+        pkg_manager="dnf"
+    elif command -v yum &>/dev/null; then
+        pkg_manager="yum"
     fi
 
-    # Define dependencies and their package names for supported systems
+    # 2. Determine Architecture for yq
+    case "$(uname -m)" in
+        x86_64) arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *) arch="unsupported" ;;
+    esac
+
+    # 3. Define dependencies
     declare -A deps=(
         [jq]=jq
         [skopeo]=skopeo
         [awk]=gawk
         [timeout]=coreutils
+        [wget]=wget
     )
 
     print_message "Checking for required command-line tools..." "INFO"
 
-    # Check for complex, manually installed dependencies first
+    # Check for ALL dependencies
+
     if ! command -v docker &>/dev/null; then
-        print_message "Docker is not installed. This is a critical dependency. Please install it by following the official instructions at https://docs.docker.com/engine/install/" "DANGER"
-        exit 1
-    fi
-    if ! command -v yq &>/dev/null; then
-        print_message "yq is not installed. It is required for parsing config.yml. Please install it from https://github.com/mikefarah/yq/" "DANGER"
-        exit 1
+        print_message "Docker is not installed. This is a critical dependency. Please follow the official instructions at https://docs.docker.com/engine/install/" "DANGER"
+        manual_install_needed=true
     fi
 
-    # Check for simple, installable dependencies
+    if ! command -v yq &>/dev/null; then
+        yq_missing=true
+    fi
+
     for cmd in "${!deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
-            missing_packages+=("${deps[$cmd]}")
+            missing_pkgs+=("${deps[$cmd]}")
         fi
     done
 
-    # If packages are missing, offer to install them
-    if [ ${#missing_packages[@]} -gt 0 ]; then
-        print_message "The following required packages are missing: ${missing_packages[*]}" "WARNING"
-
-        case "$os_id" in
-            "ubuntu"|"debian")
-                read -rp "Would you like to attempt to install them now with 'apt'? (y/n): " response
-                if [[ "$response" =~ ^[yY]$ ]]; then
-                    print_message "Attempting to install with 'sudo apt-get install'... You may be prompted for your password." "INFO"
-                    if sudo apt-get update && sudo apt-get install -y "${missing_packages[@]}"; then
-                        print_message "Dependencies installed successfully." "GOOD"
-                    else
-                        print_message "Failed to install dependencies. Please install them manually." "DANGER"
-                        exit 1
-                    fi
+    # Offer to install packages via the system's package manager
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        print_message "The following required packages can be installed via your package manager: ${missing_pkgs[*]}" "WARNING"
+        if [ -n "$pkg_manager" ]; then
+            read -rp "Would you like to attempt to install them now? (y/n): " response
+            if [[ "$response" =~ ^[yY]$ ]]; then
+                print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
+                local install_cmd
+                if [ "$pkg_manager" == "apt" ]; then
+                    install_cmd="sudo apt-get update && sudo apt-get install -y"
                 else
-                    print_message "Installation cancelled. Please install the missing packages manually." "DANGER"
+                    install_cmd="sudo $pkg_manager install -y"
+                fi
+
+                if eval "$install_cmd ${missing_pkgs[*]}"; then
+                    print_message "Package manager dependencies installed successfully." "GOOD"
+                else
+                    print_message "Failed to install dependencies. Please install them manually." "DANGER"
                     exit 1
                 fi
-                ;;
-            *)
-                print_message "Your OS ($os_id) is not supported for automatic installation. Please install the missing packages manually." "DANGER"
+            else
+                print_message "Installation cancelled. Please install all dependencies manually." "DANGER"
                 exit 1
-                ;;
-        esac
-    else
-        print_message "All required dependencies are installed." "GOOD"
+            fi
+        else
+            print_message "No supported package manager (apt/dnf/yum) found. Please install packages manually." "DANGER"
+            exit 1
+        fi
+    fi
+
+    # Offer to download and install yq if it was missing
+    if [ "$yq_missing" = true ]; then
+        print_message "yq is not installed. It is required for parsing config.yml." "WARNING"
+        if [ "$arch" == "unsupported" ]; then
+            print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
+            manual_install_needed=true
+        else
+            read -rp "Would you like to download the latest version for your architecture ($arch) now? (y/n): " response
+            if [[ "$response" =~ ^[yY]$ ]]; then
+                print_message "Attempting to download yq with 'sudo wget'... You may be prompted for your password." "INFO"
+                local yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch}"
+                if sudo wget "$yq_url" -O /usr/bin/yq && sudo chmod +x /usr/bin/yq; then
+                    print_message "yq installed successfully to /usr/bin/yq." "GOOD"
+                else
+                    print_message "Failed to download or install yq. Please install it manually." "DANGER"
+                    manual_install_needed=true
+                fi
+            else
+                print_message "Installation cancelled. Please install yq manually." "DANGER"
+                manual_install_needed=true
+            fi
+        fi
+    fi
+
+    # Exit if manual installations are still required
+    if [ "$manual_install_needed" = true ]; then
+        print_message "Please address the manually installed dependencies listed above before running the script again." "DANGER"
+        exit 1
+    fi
+
+    # If we get here, all dependencies are met
+    if [ "$yq_missing" = false ] && [ ${#missing_pkgs[@]} -eq 0 ]; then
+         print_message "All required dependencies are installed." "GOOD"
     fi
 }
 
