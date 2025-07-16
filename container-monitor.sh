@@ -161,6 +161,7 @@ print_header_box() {
     local date_color="$COLOR_RESET"
     local update_color="$COLOR_YELLOW"
 
+    # --- Prepare content lines ---
     local line1="Container Monitor ${VERSION}"
     local line2="Updated: ${VERSION_DATE}"
     local line3=""
@@ -168,31 +169,38 @@ print_header_box() {
         line3="A new version is available to update"
     fi
 
+    # --- Helper function to print a centered line within the box ---
     print_centered_line() {
         local text="$1"
         local text_color="$2"
         local text_len=${#text}
 
+        # Calculate padding needed on each side to center the text
         local padding_total=$((box_width - text_len))
         local padding_left=$((padding_total / 2))
         local padding_right=$((padding_total - padding_left))
 
+        # Print the fully constructed line
         printf "${border_color}║%*s%s%s%*s${border_color}║${COLOR_RESET}\n" \
             "$padding_left" "" \
             "${text_color}" "${text}" \
             "$padding_right" ""
     }
 
+    # --- Draw the box ---
     local border_char="═"
-    local top_border; top_border=$(printf '%0.s' "$border_char" | head -c "$box_width")
+    local top_border=""
+    for ((i=0; i<box_width; i++)); do top_border+="$border_char"; done
 
     echo -e "${border_color}╔${top_border}╗${COLOR_RESET}"
     print_centered_line "$line1" "$version_color"
     print_centered_line "$line2" "$date_color"
 
+    # If the optional update line exists, print it
     if [ -n "$line3" ]; then
         local separator_char="─"
-        local separator; separator=$(printf '%0.s' "$separator_char" | head -c "$box_width")
+        local separator=""
+        for ((i=0; i<box_width; i++)); do separator+="$separator_char"; done
         echo -e "${border_color}╠${separator}╣${COLOR_RESET}"
         print_centered_line "$line3" "$update_color"
     fi
@@ -914,12 +922,39 @@ perform_checks_for_container() {
 # --- Main Execution ---
 
 main() {
-    # check for and offer to install any missing dependencies
     check_and_install_dependencies
-    # load all configuration from files and environment variables
     load_configuration
 
-    # --- Print header for manual runs ---
+    # --- Argument Parsing for --no-update flag ---
+    local run_update_check=true
+    declare -a args_without_no_update=()
+    for arg in "$@"; do
+        if [[ "$arg" == "--no-update" ]]; then
+            run_update_check=false
+        else
+            args_without_no_update+=("$arg")
+        fi
+    done
+    set -- "${args_without_no_update[@]}" # Reset positional parameters
+
+    # --- Check for script updates (now happens before the header box) ---
+    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
+        local latest_version
+        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
+            self_update
+        fi
+    fi
+
+    # --- Determine script mode based on arguments ---
+    if [[ " ${args_without_no_update[*]} " =~ " --interactive-update " ]]; then
+        INTERACTIVE_UPDATE_MODE=true
+    fi
+    if [[ " ${args_without_no_update[*]} " =~ " summary " ]]; then
+        SUMMARY_ONLY_MODE=true
+    fi
+
+    # --- Print Header Box ---
     if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
         print_header_box
     fi
@@ -944,15 +979,6 @@ main() {
         esac
     done
     set -- "${new_args[@]}"
-
-    local run_update_check=true
-    if [[ "$1" == "--no-update" ]]; then run_update_check=false; shift; fi
-
-    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
-        local latest_version
-        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
-        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then self_update; fi
-    fi
 
     if [[ "$1" == "--interactive-update" ]]; then
         run_interactive_update_mode
