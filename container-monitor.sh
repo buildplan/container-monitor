@@ -51,13 +51,13 @@ SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/c
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
 # --- ANSI Color Codes ---
-COLOR_RESET="\033[0m"
-COLOR_RED="\033[0;31m"
-COLOR_GREEN="\033[0;32m"
-COLOR_YELLOW="\033[0;33m"
-COLOR_CYAN="\033[0;36m"
-COLOR_MAGENTA="\033[0;35m"
-COLOR_BLUE="\033[0;34m"
+COLOR_RESET=$'\033[0m'
+COLOR_RED=$'\033[0;31m'
+COLOR_GREEN=$'\033[0;32m'
+COLOR_YELLOW=$'\033[0;33m'
+COLOR_CYAN=$'\033[0;36m'
+COLOR_MAGENTA=$'\033[0;35m'
+COLOR_BLUE=$'\033[0;34m'
 
 # --- Global Flags ---
 SUMMARY_ONLY_MODE=false
