@@ -101,55 +101,54 @@ NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
-# --- Load Configuration (Priority: Env > YAML > Default) ---
-_CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
+load_configuration() {
+    # Helper function to read a value from YAML, returning an empty string if not found
+    get_config_val() {
+        if [ -f "$_CONFIG_FILE_PATH" ]; then
+            yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
+        else
+            echo ""
+        fi
+    }
 
-# Helper function to read a value from YAML, returning an empty string if not found
-get_config_val() {
-    if [ -f "$_CONFIG_FILE_PATH" ]; then
-        yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
-    else
-        echo ""
+    # Sets a final variable value based on the priority: ENV > YAML > Default
+    set_final_config() {
+        local var_name="$1"
+        local yaml_path="$2"
+        local default_value="$3"
+
+        local env_value; env_value=$(printenv "$var_name")
+        local yaml_value; yaml_value=$(get_config_val "$yaml_path")
+
+        if [ -n "$env_value" ]; then
+            printf -v "$var_name" '%s' "$env_value"
+        elif [ -n "$yaml_value" ]; then
+            printf -v "$var_name" '%s' "$yaml_value"
+        else
+            printf -v "$var_name" '%s' "$default_value"
+        fi
+    }
+
+    # Set all configuration variables
+    set_final_config "LOG_LINES_TO_CHECK"           ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
+    set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
+    set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
+    set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
+    set_final_config "DISK_SPACE_THRESHOLD"          ".thresholds.disk_space"                "$_SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD"
+    set_final_config "NETWORK_ERROR_THRESHOLD"       ".thresholds.network_error"             "$_SCRIPT_DEFAULT_NETWORK_ERROR_THRESHOLD"
+    set_final_config "HOST_DISK_CHECK_FILESYSTEM"    ".host_system.disk_check_filesystem"    "$_SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM"
+    set_final_config "NOTIFICATION_CHANNEL"          ".notifications.channel"                "$_SCRIPT_DEFAULT_NOTIFICATION_CHANNEL"
+    set_final_config "DISCORD_WEBHOOK_URL"           ".notifications.discord.webhook_url"    "$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL"
+    set_final_config "NTFY_SERVER_URL"               ".notifications.ntfy.server_url"        "$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
+    set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
+    set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
+
+    # Load the list of default containers from the config file if no ENV var is set for it
+    if [ -z "$CONTAINER_NAMES" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
+        mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$SCRIPT_DIR/config.yml")
     fi
+
 }
-
-# sets a final variable value based on the priority: ENV > YAML > Default
-# Usage: set_final_config "VARIABLE_NAME_IN_SCRIPT" "YAML_PATH" "DEFAULT_VALUE"
-set_final_config() {
-    local var_name="$1"
-    local yaml_path="$2"
-    local default_value="$3"
-
-    local env_value; env_value=$(printenv "$var_name")
-    local yaml_value; yaml_value=$(get_config_val "$yaml_path")
-
-    if [ -n "$env_value" ]; then
-        printf -v "$var_name" '%s' "$env_value"
-    elif [ -n "$yaml_value" ]; then
-        printf -v "$var_name" '%s' "$yaml_value"
-    else
-        printf -v "$var_name" '%s' "$default_value"
-    fi
-}
-
-# Set all configuration variables
-set_final_config "LOG_LINES_TO_CHECK"           ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
-set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
-set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
-set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
-set_final_config "DISK_SPACE_THRESHOLD"          ".thresholds.disk_space"                "$_SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD"
-set_final_config "NETWORK_ERROR_THRESHOLD"       ".thresholds.network_error"             "$_SCRIPT_DEFAULT_NETWORK_ERROR_THRESHOLD"
-set_final_config "HOST_DISK_CHECK_FILESYSTEM"    ".host_system.disk_check_filesystem"    "$_SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM"
-set_final_config "NOTIFICATION_CHANNEL"          ".notifications.channel"                "$_SCRIPT_DEFAULT_NOTIFICATION_CHANNEL"
-set_final_config "DISCORD_WEBHOOK_URL"           ".notifications.discord.webhook_url"    "$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL"
-set_final_config "NTFY_SERVER_URL"               ".notifications.ntfy.server_url"        "$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
-set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
-set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
-
-# Load the list of default containers from the config file if no ENV var is set for it
-if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
-    mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH")
-fi
 
 
 # --- Functions ---
@@ -845,9 +844,12 @@ perform_checks_for_container() {
 # --- Main Execution ---
 
 main() {
+    # check for and offer to install any missing dependencies
     check_and_install_dependencies
+    # load all configuration from files and environment variables
+    load_configuration
 
-    # print header
+    # --- Print header for manual runs ---
     if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
         print_header_box
     fi
