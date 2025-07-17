@@ -3,7 +3,9 @@
 [![Shell Script Linting](https://github.com/buildplan/container-monitor/actions/workflows/lint.yml/badge.svg)](https://github.com/buildplan/container-monitor/actions/workflows/lint.yml)
 [![Test Script Execution](https://github.com/buildplan/container-monitor/actions/workflows/test-execution.yml/badge.svg)](https://github.com/buildplan/container-monitor/actions/workflows/test-execution.yml)
 
-A comprehensive Bash script to monitor Docker containers. It checks container health, resource usage, and image updates, sending notifications about any issues it finds. The script is designed to be fast, efficient, and easily automated.
+A  Bash script to monitor Docker containers. It checks container health, resource usage, and image updates, sending notifications about any issues it finds. The script is designed to be fast, efficient, and easily automated.
+
+-----
 
 ### Features
 
@@ -16,6 +18,7 @@ A comprehensive Bash script to monitor Docker containers. It checks container he
   - **Resource & Log Scanning**: Monitors CPU, memory, disk usage, and network errors against configurable thresholds, and scans logs for error keywords.
   - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
   - **Flexible Notifications**: Sends alerts to **Discord** or a self-hosted **ntfy** server with the hostname included.
+  - **Selective Notifications**: Configure which types of issues (e.g., `Updates`, `Logs`) should trigger a notification.
   - **Polished Interface**: Displays an informative header box and a progress bar during manual runs.
   - **Summary Report**: Provides a final summary with host-level stats and a list of containers with issues.
 
@@ -23,7 +26,7 @@ A comprehensive Bash script to monitor Docker containers. It checks container he
 
 ### Prerequisites
 
-The script requires a few common command-line tools. However, it includes a smart setup process to help you install them.
+The script requires a few common command-line tools.
 
   - `docker`
   - `jq`
@@ -41,7 +44,7 @@ When you first run the script, it will check for these dependencies. If any are 
 
 #### 1\. Get the Project Files
 
-Download the main script and the new, simplified YAML configuration file.
+Download the main script and the YAML configuration file.
 
 ```bash
 # Download the main script
@@ -91,8 +94,14 @@ general:
 
 notifications:
   channel: "discord"
+  notify_on: "Updates,Logs,Status"
   discord:
     webhook_url: "https://discord.com/api/webhooks/your_hook_here"
+  ntfy:
+    server_url: "https://ntfy.sh"
+    topic: "your_topic"
+    priority: 4
+    icon_url: "https://cdn.jsdelivr.net/gh/selfhst/icons/png/docker.png"
 
 containers:
   monitor_defaults:
@@ -111,6 +120,7 @@ You can override any setting from the YAML file by exporting an environment vari
 | `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `40` |
 | `CPU_WARNING_THRESHOLD` | `.thresholds.cpu_warning` | `80` |
 | `NOTIFICATION_CHANNEL` | `.notifications.channel` | `none`|
+| `NOTIFY_ON` | `.notifications.notify_on`| (all issues) |
 | `DISCORD_WEBHOOK_URL`| `.notifications.discord.webhook_url`| `...` |
 | `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
 
@@ -185,6 +195,14 @@ Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
 ### Example Summary Output
 
 ```
+┌───────────────────────────────────────────────────────┐
+│              Container Monitor v0.22                  │
+│                Updated: 2025-07-17                    │
+└───────────────────────────────────────────────────────┘
+
+Starting asynchronous checks for 3 containers...
+Progress: [████████████████████████████████████████] 100% (3/3) | Elapsed: 00:05 [\]
+
 [SUMMARY] -------------------------- Host System Stats ---------------------------
 [SUMMARY]   Host Disk Usage (/): 34% used (Size: 25G, Used: 7.9G, Available: 16G)
 [SUMMARY]   Host Memory Usage: Total: 1967MB, Used: 848MB (43%), Free: 132MB
