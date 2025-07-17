@@ -142,10 +142,56 @@ load_configuration() {
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
     set_final_config "NOTIFY_ON"                     ".notifications.notify_on"              "Updates,Logs,Status,Restarts,Resources,Disk,Network"
 
+    # Validate NOTIFICATION_CHANNEL
+    if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
+        print_message "Invalid notification_channel '$NOTIFICATION_CHANNEL' in config.yml. Valid values are: discord, ntfy, none. Disabling notifications." "WARNING"
+        NOTIFICATION_CHANNEL="none"
+    fi
+
+    # Validate NOTIFY_ON values
+    if [ -n "$NOTIFY_ON" ]; then
+        valid_issues=("Updates" "Logs" "Status" "Restarts" "Resources" "Disk" "Network")
+        IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
+        for issue in "${notify_on_array[@]}"; do
+            local is_valid=false
+            for valid_issue in "${valid_issues[@]}"; do
+                if [[ "${issue,,}" == "${valid_issue,,}" ]]; then
+                    is_valid=true
+                    break
+                fi
+            done
+            if [ "$is_valid" = false ]; then
+                print_message "Invalid notify_on value '$issue' in config.yml. Valid values are: ${valid_issues[*]}" "WARNING"
+            fi
+        done
+    elif [ "$NOTIFICATION_CHANNEL" != "none" ]; then
+        print_message "notify_on is empty in config.yml. No notifications will be sent." "WARNING"
+    fi
+
+    # Normalize NOTIFY_ON to use standard case (optional, ensures consistency)
+    if [ -n "$NOTIFY_ON" ]; then
+        local normalized_notify_on=""
+        IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
+        for issue in "${notify_on_array[@]}"; do
+            case "${issue,,}" in
+                updates) normalized_notify_on+="Updates," ;;
+                logs) normalized_notify_on+="Logs," ;;
+                status) normalized_notify_on+="Status," ;;
+                restarts) normalized_notify_on+="Restarts," ;;
+                resources) normalized_notify_on+="Resources," ;;
+                disk) normalized_notify_on+="Disk," ;;
+                network) normalized_notify_on+="Network," ;;
+                *) normalized_notify_on+="$issue," ;; # Preserve invalid values for warning
+            esac
+        done
+        NOTIFY_ON="${normalized_notify_on%,}" # Remove trailing comma
+    fi
+
     # Load the list of default containers from the config file if no ENV var is set for it
     if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
+
 }
 
 # --- Functions ---
@@ -1152,7 +1198,7 @@ main() {
                 for issue in "${issue_array[@]}"; do
                     for notify_issue in "${notify_on_array[@]}"; do
                         # Handle Updates specially since it contains additional details
-                        if [[ "$notify_issue" == "Updates" && "$issue" == Update* ]] || [[ "$issue" == "$notify_issue" ]]; then
+                        if [[ "${notify_issue,,}" == "updates" && "$issue" == Update* ]] || [[ "${issue,,}" == "${notify_issue,,}" ]]; then
                             filtered_issues+="$issue,"
                             notify_issues=true
                         fi
