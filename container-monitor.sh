@@ -45,8 +45,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.21"
-VERSION_DATE="2025-07-16"
+VERSION="v0.22"
+VERSION_DATE="2025-07-17"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -128,7 +128,7 @@ load_configuration() {
     }
 
     # Set all configuration variables
-    set_final_config "LOG_LINES_TO_CHECK"           ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
+    set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
     set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
     set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
     set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
@@ -140,11 +140,58 @@ load_configuration() {
     set_final_config "NTFY_SERVER_URL"               ".notifications.ntfy.server_url"        "$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
     set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
+    set_final_config "NOTIFY_ON"                     ".notifications.notify_on"              "Updates,Logs,Status,Restarts,Resources,Disk,Network"
+
+    # Validate NOTIFICATION_CHANNEL
+    if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
+        print_message "Invalid notification_channel '$NOTIFICATION_CHANNEL' in config.yml. Valid values are: discord, ntfy, none. Disabling notifications." "WARNING"
+        NOTIFICATION_CHANNEL="none"
+    fi
+
+    # Validate NOTIFY_ON values
+    if [ -n "$NOTIFY_ON" ]; then
+        valid_issues=("Updates" "Logs" "Status" "Restarts" "Resources" "Disk" "Network")
+        IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
+        for issue in "${notify_on_array[@]}"; do
+            local is_valid=false
+            for valid_issue in "${valid_issues[@]}"; do
+                if [[ "${issue,,}" == "${valid_issue,,}" ]]; then
+                    is_valid=true
+                    break
+                fi
+            done
+            if [ "$is_valid" = false ]; then
+                print_message "Invalid notify_on value '$issue' in config.yml. Valid values are: ${valid_issues[*]}" "WARNING"
+            fi
+        done
+    elif [ "$NOTIFICATION_CHANNEL" != "none" ]; then
+        print_message "notify_on is empty in config.yml. No notifications will be sent." "WARNING"
+    fi
+
+    # Normalize NOTIFY_ON to use standard case (optional, ensures consistency)
+    if [ -n "$NOTIFY_ON" ]; then
+        local normalized_notify_on=""
+        IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
+        for issue in "${notify_on_array[@]}"; do
+            case "${issue,,}" in
+                updates) normalized_notify_on+="Updates," ;;
+                logs) normalized_notify_on+="Logs," ;;
+                status) normalized_notify_on+="Status," ;;
+                restarts) normalized_notify_on+="Restarts," ;;
+                resources) normalized_notify_on+="Resources," ;;
+                disk) normalized_notify_on+="Disk," ;;
+                network) normalized_notify_on+="Network," ;;
+                *) normalized_notify_on+="$issue," ;; # Preserve invalid values for warning
+            esac
+        done
+        NOTIFY_ON="${normalized_notify_on%,}" # Remove trailing comma
+    fi
 
     # Load the list of default containers from the config file if no ENV var is set for it
     if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
+
 }
 
 # --- Functions ---
@@ -1142,14 +1189,33 @@ main() {
 
 	if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
+            local notify_issues=false
+            IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
-		summary_message+="\n[$container]\n- $issues\n"
+                local filtered_issues=""
+                IFS=',' read -r -a issue_array <<< "$issues"
+                for issue in "${issue_array[@]}"; do
+                    for notify_issue in "${notify_on_array[@]}"; do
+                        # Handle Updates specially since it contains additional details
+                        if [[ "${notify_issue,,}" == "updates" && "$issue" == Update* ]] || [[ "${issue,,}" == "${notify_issue,,}" ]]; then
+                            filtered_issues+="$issue,"
+                            notify_issues=true
+                        fi
+                    done
+                done
+                if [ -n "$filtered_issues" ]; then
+                    filtered_issues="${filtered_issues%,}"
+                    summary_message+="\n[$container]\n- $filtered_issues\n"
+                fi
             done
-            summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
-
-            local notification_title="🚨 Container Monitor on $(hostname)"
-            send_notification "$summary_message" "$notification_title"
+            if [ "$notify_issues" = true ]; then
+                summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
+                if [ -n "$summary_message" ]; then
+                    local notification_title="🚨 Container Monitor on $(hostname)"
+                    send_notification "$summary_message" "$notification_title"
+                fi
+            fi
         fi
 
         rm -rf "$results_dir"
