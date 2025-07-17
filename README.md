@@ -114,7 +114,7 @@ You can override any setting from the YAML file by exporting an environment vari
 | `DISCORD_WEBHOOK_URL`| `.notifications.discord.webhook_url`| `...` |
 | `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
 
-> **Note**: You can list Docker container names with `docker ps -a --format '{{.Names}}'`. Then, edit `config.sh` to add the names of the containers you want to monitor by default to the `CONTAINER_NAMES_DEFAULT` array.
+> **Note**: You can list Docker container names with `docker ps -a --format '{{.Names}}'`. Then, edit `config.yml` to add the names of the containers you want to monitor by default to 'monitor_defaults:`.
 
 -----
 
