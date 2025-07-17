@@ -16,6 +16,8 @@ host_system:
 notifications:
   # Set channel to "discord", "ntfy", or "none"
   channel: "none"
+  # Specify which issues trigger notifications (comma-separated: Updates,Logs,Status,Restarts,Resources,Disk,Network)
+  notify_on: "Updates,Logs"
   discord:
     webhook_url: "https://discord.com/api/webhooks/xxxxxxxx"
   ntfy:
