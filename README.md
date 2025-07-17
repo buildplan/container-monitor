@@ -108,11 +108,13 @@ You can override any setting from the YAML file by exporting an environment vari
 
 | Environment Variable | YAML Path | Default |
 |---|---|---|
-| `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `20` |
+| `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `40` |
 | `CPU_WARNING_THRESHOLD` | `.thresholds.cpu_warning` | `80` |
 | `NOTIFICATION_CHANNEL` | `.notifications.channel` | `none`|
 | `DISCORD_WEBHOOK_URL`| `.notifications.discord.webhook_url`| `...` |
 | `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
+
+> **Note**: You can list Docker container names with `docker ps -a --format '{{.Names}}'`. Then, edit `config.sh` to add the names of the containers you want to monitor by default to the `CONTAINER_NAMES_DEFAULT` array.
 
 -----
 
@@ -142,7 +144,7 @@ You can override any setting from the YAML file by exporting an environment vari
 
 For automated execution, using `summary` and `--no-update` is recommended.
 
-#### systemd Timer Setup (Recommended)
+#### Option A: systemd Timer Setup (Recommended)
 
 Create `/etc/systemd/system/docker-monitor.service` and `docker-monitor.timer`.
 
@@ -169,6 +171,14 @@ Create `/etc/systemd/system/docker-monitor.service` and `docker-monitor.timer`.
     ```
 
 Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
+
+#### Option B: Cron Job Setup
+
+1.  Open your crontab: `crontab -e`
+2.  Add the following line to run the script every 6 hours:
+    ```crontab
+    0 */6 * * * /path/to/your/container-monitor.sh --no-update summary >/dev/null 2>&1
+    ```
 
 -----
 
