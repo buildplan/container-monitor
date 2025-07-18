@@ -154,8 +154,9 @@ load_configuration() {
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
 
-    mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
-
+    if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
+        LOG_ERROR_PATTERNS=()
+    fi
 
     # Validate NOTIFICATION_CHANNEL
     if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
@@ -474,6 +475,20 @@ send_ntfy_notification() {
     local priority; priority=$(get_config_val ".notifications.ntfy.priority")
     local icon_url; icon_url=$(get_config_val ".notifications.ntfy.icon_url")
     local click_url; click_url=$(get_config_val ".notifications.ntfy.click_url")
+
+    if [[ -n "$priority" && ! "$priority" =~ ^[1-5]$ ]]; then
+        print_message "Invalid ntfy priority '$priority' in config.yml. Must be between 1-5." "WARNING"
+        priority="" # Clear the invalid value
+    fi
+    if [[ -n "$icon_url" && ! "$icon_url" =~ ^https?:// ]]; then
+        print_message "Invalid ntfy icon_url '$icon_url' in config.yml. Must be a valid URL." "WARNING"
+        icon_url=""
+    fi
+    if [[ -n "$click_url" && ! "$click_url" =~ ^https?:// ]]; then
+        print_message "Invalid ntfy click_url '$click_url' in config.yml. Must be a valid URL." "WARNING"
+        click_url=""
+    fi
+
     local curl_opts=()
     curl_opts+=("-s")
     curl_opts+=("-H" "Title: $title")
@@ -795,7 +810,7 @@ check_for_updates() {
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-        local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1) # Use opts
+        local skopeo_output; skopeo_output=$(run_with_retry skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1) # Use opts
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
@@ -810,7 +825,7 @@ check_for_updates() {
         fi
     fi
 
-    local latest_stable_version; latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
+    local latest_stable_version; latest_stable_version=$(run_with_retry skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
@@ -904,6 +919,12 @@ check_host_memory_usage() { # Echos output, does not call print_message directly
 pull_new_image() {
     local container_name_to_update="$1"
     print_message "Getting image details for '$container_name_to_update'..." "INFO"
+
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        if ! echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin >/dev/null 2>&1; then
+            print_message "Failed to login to Docker registry. Please check credentials." "DANGER"
+        fi
+    fi
 
     local current_image_ref
     current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
@@ -1258,7 +1279,8 @@ main() {
         trap 'rm -f "$LOCK_FILE"' EXIT
 
         # Ensure state file exists and has basic structure
-        if [ ! -f "$STATE_FILE" ]; then
+        if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
+            print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}}' > "$STATE_FILE"
         fi
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
@@ -1374,13 +1396,20 @@ main() {
 
         # --- UPDATE AND SAVE STATE ---
         # Re-acquire lock to safely write the new state
-        for ((i=0; i<100; i++)); do
+        local lock_acquired=false
+        for ((i=0; i<LOCK_TIMEOUT_SECONDS*10; i++)); do
             if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
                 trap 'rm -f "$LOCK_FILE"' EXIT
+                lock_acquired=true
                 break
             fi
             sleep 0.1
         done
+        if [ "$lock_acquired" = false ]; then
+            print_message "Could not acquire lock for state update after $LOCK_TIMEOUT_SECONDS seconds." "DANGER"
+            rm -rf "$results_dir"
+            return 1
+        fi
 
         local new_state_json="$current_state_json"
         # Update restart counts
