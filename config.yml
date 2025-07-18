@@ -25,7 +25,7 @@ notifications:
     topic: "your_ntfy_topic_here"
     access_token: ""
     priority: 3  # 1=min, 3=default, 4=high, 5=urgent
-    icon_url: "https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/cm-logo.png"
+    icon_url: "https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/logo.png"
     click_url: "" # Optional: e.g., "http://your-server:9000" to open a dashboard
 
 containers:
