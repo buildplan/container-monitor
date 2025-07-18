@@ -25,11 +25,11 @@
 #
 # Usage:
 #   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
-#   ./container-monitor.sh --pull      			- Interactively choose which containers to update.
+#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
+#   ./container-monitor.sh --pull      				- Interactively choose which containers to update.
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
-#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
 #   ./docker-container-monitor.sh logs <container_name>     	- Show logs for a specific container
 #   ./docker-container-monitor.sh logs errors <container_name> 	- Show errors in logs for a specific container
