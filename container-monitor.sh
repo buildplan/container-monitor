@@ -150,6 +150,8 @@ load_configuration() {
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
     set_final_config "NOTIFY_ON"                     ".notifications.notify_on"              "Updates,Logs,Status,Restarts,Resources,Disk,Network"
     set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
+    set_final_config "DOCKER_USERNAME"               ".auth.docker_username"                 ""
+    set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>&1); then
@@ -799,6 +801,11 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
 
+    local skopeo_opts=()
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
+    fi
+
     get_release_url() {
         yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"
     }
@@ -806,7 +813,7 @@ check_for_updates() {
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-        local skopeo_output; skopeo_output=$(run_with_retry skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
+        local skopeo_output; skopeo_output=$(run_with_retry skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1) # Use opts
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
@@ -821,7 +828,7 @@ check_for_updates() {
         fi
     fi
 
-    local latest_stable_version; latest_stable_version=$(run_with_retry skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+    local latest_stable_version; latest_stable_version=$(run_with_retry skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
@@ -915,6 +922,12 @@ check_host_memory_usage() { # Echos output, does not call print_message directly
 pull_new_image() {
     local container_name_to_update="$1"
     print_message "Getting image details for '$container_name_to_update'..." "INFO"
+
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        if ! echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin >/dev/null 2>&1; then
+            print_message "Failed to login to Docker registry. Please check credentials." "DANGER"
+        fi
+    fi
 
     local current_image_ref
     current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
