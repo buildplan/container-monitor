@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.23"
+VERSION="v0.30-t"
 VERSION_DATE="2025-07-18"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -68,6 +68,9 @@ UPDATE_SKIPPED=false
 # --- Get path to script directory ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export SCRIPT_DIR
+
+STATE_FILE="$SCRIPT_DIR/.monitor_state.json"
+LOCK_FILE="$SCRIPT_DIR/.monitor_state.lock"
 
 # --- Script Default Configuration Values ---
 _SCRIPT_DEFAULT_LOG_LINES_TO_CHECK=20
@@ -141,6 +144,7 @@ load_configuration() {
     set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
     set_final_config "NOTIFY_ON"                     ".notifications.notify_on"              "Updates,Logs,Status,Restarts,Resources,Disk,Network"
+    set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
 
     # Validate NOTIFICATION_CHANNEL
     if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
@@ -580,11 +584,27 @@ check_container_status() {
 }
 
 check_container_restarts() {
-    local container_name="$1"; local inspect_data="$2"; local restart_count is_restarting
-    restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_data"); is_restarting=$(jq -r '.[0].State.Restarting' <<< "$inspect_data")
-    if [ "$is_restarting" = "true" ]; then print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container '$container_name' is currently restarting." "WARNING"; return 1; fi
-    if [ "$restart_count" -gt 0 ]; then print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container '$container_name' has restarted $restart_count times." "WARNING"; return 1; fi
-    print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} No unexpected restarts detected for '$container_name'." "GOOD"; return 0
+    local container_name="$1"; local inspect_data="$2"
+    local saved_restart_counts_json="$3" # accept saved state as an argument
+
+    local current_restart_count is_restarting
+    current_restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_data")
+    is_restarting=$(jq -r '.[0].State.Restarting' <<< "$inspect_data")
+
+    # Get the previously saved restart count from the JSON state
+    local saved_restart_count
+    saved_restart_count=$(jq -r --arg name "$container_name" '.restarts[$name] // 0' <<< "$saved_restart_counts_json")
+
+    # Check for restart loops
+    if [ "$is_restarting" = "true" ]; then
+        print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container is currently restarting." "WARNING"; return 1
+    fi
+    # Check if the restart count has increased
+    if [ "$current_restart_count" -gt "$saved_restart_count" ]; then
+        print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container has restarted (total: $current_restart_count)." "WARNING"; return 1
+    fi
+
+    print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} No new restarts detected (total: $current_restart_count)." "GOOD"; return 0
 }
 
 check_resource_usage() {
@@ -671,6 +691,7 @@ check_network() {
 
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
+    local state_json="$3" # Accept full state JSON
 
     # 1. Prerequisite and Initial Checks
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
@@ -678,7 +699,30 @@ check_for_updates() {
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
 
-    # 2. Extract Image Name and Tag
+    # 2. Check for a valid cache entry first
+    local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g') # Create a valid JSON key
+    local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
+
+    if [ -n "$cached_entry" ]; then
+        local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
+        local current_ts; current_ts=$(date +%s)
+        local cache_age_sec=$((current_ts - cached_ts))
+        local cache_max_age_sec=$((UPDATE_CHECK_CACHE_HOURS * 3600))
+
+        if [ "$cache_age_sec" -lt "$cache_max_age_sec" ]; then
+            local cached_msg; cached_msg=$(jq -r '.message' <<< "$cached_entry")
+            local cached_code; cached_code=$(jq -r '.exit_code' <<< "$cached_entry")
+            if [ "$cached_code" -ne 0 ]; then
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} ${cached_msg} (cached)" "WARNING" >&2
+                echo "$cached_msg"
+            else
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date (cached)." "GOOD" >&2
+            fi
+            return "$cached_code"
+        fi
+    fi
+
+    # 3. If no valid cache, perform a live check
     local current_tag="latest"
     local image_name_no_tag="$current_image_ref"
     if [[ "$current_image_ref" == *":"* ]]; then
@@ -686,7 +730,6 @@ check_for_updates() {
         image_name_no_tag="${current_image_ref%:$current_tag}"
     fi
 
-    # 3. Construct the base repository path for skopeo
     local registry_host="registry-1.docker.io"
     local image_path_for_skopeo="$image_name_no_tag"
     if [[ "$image_name_no_tag" == *"/"* ]]; then
@@ -701,24 +744,14 @@ check_for_updates() {
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
 
     get_release_url() {
-        local image_to_check="$1"
-        local config_file="$SCRIPT_DIR/config.yml"
-
-        if [ ! -f "$config_file" ]; then
-            return
-        fi
-
-        yq e ".containers.release_urls.\"${image_to_check}\" // \"\"" "$config_file"
+        yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"
     }
 
-    # 4. Handle 'latest' tag by comparing digests
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-
         local skopeo_output; skopeo_output=$(skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
-
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
             local summary_message="Update available for 'latest' tag"
@@ -732,13 +765,10 @@ check_for_updates() {
         fi
     fi
 
-    # 5. Handle versioned tags
     local latest_stable_version; latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
     if [ -z "$latest_stable_version" ]; then
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2
-        return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
-
     if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
         local summary_message="Update available: ${latest_stable_version}"
         local release_url; release_url=$(get_release_url "$image_name_no_tag")
@@ -747,8 +777,7 @@ check_for_updates() {
         echo "$summary_message"
         return 1
     else
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2
-        return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2; return 0
     fi
 }
 
@@ -1122,12 +1151,37 @@ main() {
 
     # --- Run Monitoring ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
-        local results_dir
-        results_dir=$(mktemp -d)
+        local results_dir; results_dir=$(mktemp -d)
+
+        # Acquire lock before reading and writing state
+        # This loop waits for up to 10 seconds to acquire the lock
+        for ((i=0; i<100; i++)); do
+            if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
+                trap 'rm -f "$LOCK_FILE"' EXIT
+                break
+            fi
+            sleep 0.1
+        done
+        if [ ! -f "$LOCK_FILE" ]; then
+            print_message "Could not acquire lock file: $LOCK_FILE. Another instance may be running." "DANGER"
+            exit 1
+        fi
+
+        # Ensure state file exists and has basic structure
+        if [ ! -f "$STATE_FILE" ]; then
+            echo '{"updates": {}, "restarts": {}}' > "$STATE_FILE"
+        fi
+        local current_state_json; current_state_json=$(cat "$STATE_FILE")
+
+        # Release lock before starting parallel jobs
+        rm -f "$LOCK_FILE"
+        trap - EXIT
+
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
                    check_resource_usage check_disk_space check_network check_for_updates check_logs
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
-               LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD NETWORK_ERROR_THRESHOLD
+               LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS
 
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
@@ -1142,7 +1196,7 @@ main() {
                     processed=$((processed + 1))
                     local percent=$((processed * 100 / total))
                     local bar_len=40
-                    local bar_filled_len=$((processed * bar_len / total))
+                    local bar_filled_len=$((processed * bar_len / total))    
                     local current_time; current_time=$(date +%s)
                     local elapsed=$((current_time - start_time))
                     local elapsed_str; elapsed_str=$(printf "%02d:%02d" $((elapsed/60)) $((elapsed%60)))
@@ -1153,15 +1207,16 @@ main() {
                     local bar_empty=""
                     for ((j=0; j< (bar_len - bar_filled_len) ; j++)); do bar_empty+="░"; done
                     printf "\r${COLOR_GREEN}Progress: [%s%s] %3d%% (%d/%d) | Elapsed: %s [${spinner_char}]${COLOR_RESET}" \
-                           "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
-                 done < progress_pipe
-                echo
+                            "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
+                done < progress_pipe
+                    echo
             ) &
             local progress_pid=$!
             exec 3> progress_pipe
         fi
 
-        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
+        # Pass the state JSON as a string to each parallel process
+        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' '''$current_state_json''' && echo >&3"
 
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             exec 3>&-
@@ -1187,7 +1242,8 @@ main() {
 
         print_summary
 
-	if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+        # --- Notification Logic ---
+        if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
             local notify_issues=false
             IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
@@ -1224,7 +1280,41 @@ main() {
                     send_notification "$summary_message" "$notification_title"
                 fi
             fi
-        fi
+	fi
+
+        # --- UPDATE AND SAVE STATE ---
+        # Re-acquire lock to safely write the new state
+        for ((i=0; i<100; i++)); do
+            if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
+                trap 'rm -f "$LOCK_FILE"' EXIT
+                break
+            fi
+            sleep 0.1
+        done
+
+        local new_state_json="$current_state_json"
+        # Update restart counts
+        for restart_file in "$results_dir"/*.restarts; do
+            if [ -f "$restart_file" ]; then
+                local container_name; container_name=$(basename "$restart_file" .restarts)
+                local count; count=$(cat "$restart_file")
+                new_state_json=$(jq --arg name "$container_name" --argjson val "$count" '.restarts[$name] = $val' <<< "$new_state_json")
+            fi
+        done
+        # Update caches from live checks
+        for cache_update_file in "$results_dir"/*.update_cache; do
+            if [ -f "$cache_update_file" ]; then
+                local cache_data; cache_data=$(cat "$cache_update_file")
+                local key; key=$(jq -r '.key' <<< "$cache_data")
+                local data; data=$(jq -r '.data' <<< "$cache_data")
+                new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
+            fi
+        done
+
+        # Write the new state and release the lock
+        echo "$new_state_json" > "$STATE_FILE"
+        rm -f "$LOCK_FILE"
+        trap - EXIT
 
         rm -rf "$results_dir"
     fi

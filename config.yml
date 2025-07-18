@@ -3,6 +3,7 @@
 general:
   log_lines_to_check: 40
   log_file: "docker-monitor.log"
+  update_check_cache_hours: 6 # check for new updates after 6 hours
 
 thresholds:
   cpu_warning: 80
