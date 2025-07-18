@@ -813,7 +813,7 @@ check_for_updates() {
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-        local skopeo_output; skopeo_output=$(run_with_retry skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1) # Use opts
+        local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1)
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
@@ -828,7 +828,7 @@ check_for_updates() {
         fi
     fi
 
-    local latest_stable_version; latest_stable_version=$(run_with_retry skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
+    local latest_stable_version; latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
