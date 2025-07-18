@@ -107,6 +107,11 @@ declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 load_configuration() {
     _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
 
+    if [ -f "$_CONFIG_FILE_PATH" ] && ! yq e '.' "$_CONFIG_FILE_PATH" >/dev/null 2>&1; then
+        print_message "Invalid syntax in config.yml. Please check the file for errors." "DANGER"
+        exit 1
+    fi
+
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
             yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
