@@ -15,14 +15,6 @@ logs:
     - "SEVERE"
     - "Traceback"
 
-# Credentials for private registries.
-# It is safer to provide these using environment variables:
-# export DOCKER_USERNAME="myuser"
-# export DOCKER_PASSWORD="mypassword"
-auth:
-  docker_username: ""
-  docker_password: ""
-
 thresholds:
   cpu_warning: 80
   memory_warning: 80
