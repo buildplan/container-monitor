@@ -119,12 +119,14 @@ You can override any setting from the YAML file by exporting an environment vari
 |---|---|---|
 | `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `40` |
 | `CPU_WARNING_THRESHOLD` | `.thresholds.cpu_warning` | `80` |
+|`UPDATE_CHECK_CACHE_HOURS`|`.general.update_check_cache_hours`|`6`|
 | `NOTIFICATION_CHANNEL` | `.notifications.channel` | `none`|
 | `NOTIFY_ON` | `.notifications.notify_on`| (all issues) |
 | `DISCORD_WEBHOOK_URL`| `.notifications.discord.webhook_url`| `...` |
 | `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
 
-> **Note**: You can list Docker container names with `docker ps -a --format '{{.Names}}'`. Then, edit `config.yml` to add the names of the containers you want to monitor by default to `monitor_defaults`.
+
+    > **Tip:** To find the names of your running containers, use the command `docker ps --format '{{.Names}}'`. You can then add the names you want to monitor to the `monitor_defaults` list in your `config.yml` file.
 
 -----
 
@@ -217,6 +219,13 @@ Progress: [███████████████████████
 ### Logging
 
 All script output, including detailed checks from non-summary runs, is logged to the file specified in `config.yml` (default: `docker-monitor.log`). For long-term use, consider using `logrotate` to manage the log file size.
+
+### State and Caching
+
+To support stateful restart alerts and update caching, the script creates a file named `.monitor_state.json` in the same directory.
+
+* **Purpose**: This file stores the last known restart count for each container and the cached results of image update checks.
+* **Management**: You should not need to edit this file manually. If you want to reset the script's memory of all restarts and clear the update cache, you can safely delete this file. It will be automatically recreated on the next run.
 
 ### Troubleshooting
 
