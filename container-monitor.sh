@@ -1054,7 +1054,7 @@ print_summary() { # Uses print_message with FORCE_STDOUT
 perform_checks_for_container() {
     local container_name_or_id="$1"
     local results_dir="$2"
-    local state_json_string="$3" # Accept state as a string
+    local state_json_string="$CURRENT_STATE_JSON_STRING" # Read state from environment
 
     # Redirect stdout to a log file for this container's check
     exec &> "$results_dir/$container_name_or_id.log"
@@ -1330,8 +1330,9 @@ main() {
             exec 3> progress_pipe
         fi
 
-        # Pass the state JSON as a string to each parallel process
-        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' '''$current_state_json''' && echo >&3"
+        # Export the state as an environment variable so it's available to sub-shells
+        export CURRENT_STATE_JSON_STRING="$current_state_json"
+        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
 
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             exec 3>&-
