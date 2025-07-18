@@ -844,8 +844,6 @@ check_for_updates() {
     fi
 }
 
-# --- Replace the check_logs function ---
-
 check_logs() {
     local container_name="$1"; local print_to_stdout="${2:-false}"; local filter_errors="${3:-false}"; local raw_logs
     raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
@@ -855,7 +853,7 @@ check_logs() {
     if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
         # Build regex from custom patterns in config.yml
         error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]}")
-        error_regex="${error_regex%|}" # Remove trailing pipe
+        error_regex="${error_regex%|}"
     else
         # Fallback to default patterns
         error_regex='error|panic|fail|fatal'
@@ -881,7 +879,7 @@ save_logs() {
     fi
 }
 
-check_host_disk_usage() { # Echos output, does not call print_message directly
+check_host_disk_usage() { # Echos output, does not call print_message directl
     local target_filesystem="${HOST_DISK_CHECK_FILESYSTEM:-/}"
     local usage_line size_hr used_hr avail_hr capacity
     local output_string
