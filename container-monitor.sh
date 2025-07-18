@@ -152,6 +152,7 @@ load_configuration() {
     set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
     set_final_config "DOCKER_USERNAME"               ".auth.docker_username"                 ""
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
+    set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
 
     mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
 
@@ -1244,19 +1245,17 @@ main() {
             rm -f "$LOCK_FILE"
         fi
 
-        # Acquire lock before reading and writing state
-        # This loop waits for up to 10 seconds to acquire the lock
-        for ((i=0; i<100; i++)); do
-            if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
-                trap 'rm -f "$LOCK_FILE"' EXIT
-                break
+        # Acquire lock, waiting up to LOCK_TIMEOUT_SECONDS
+        local lock_start_time; lock_start_time=$(date +%s)
+        while ! ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; do
+            local current_time; current_time=$(date +%s)
+            if (( (current_time - lock_start_time) >= LOCK_TIMEOUT_SECONDS )); then
+                print_message "Could not acquire lock after $LOCK_TIMEOUT_SECONDS seconds. Another instance may be running." "DANGER"
+                exit 1
             fi
-            sleep 0.1
+            sleep 1
         done
-        if [ ! -f "$LOCK_FILE" ]; then
-            print_message "Could not acquire lock file: $LOCK_FILE. Another instance may be running." "DANGER"
-            exit 1
-        fi
+        trap 'rm -f "$LOCK_FILE"' EXIT
 
         # Ensure state file exists and has basic structure
         if [ ! -f "$STATE_FILE" ]; then
