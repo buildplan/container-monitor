@@ -4,6 +4,7 @@ general:
   log_lines_to_check: 40
   log_file: "docker-monitor.log"
   update_check_cache_hours: 6 # check for new updates after 6 hours
+  lock_timeout_seconds: 30 # configurable lock timeout
 
 # Custom patterns for the log checker.
 # If this section is omitted, the script defaults to checking for:
