@@ -972,7 +972,11 @@ print_summary() { # Uses print_message with FORCE_STDOUT
 perform_checks_for_container() {
     local container_name_or_id="$1"
     local results_dir="$2"
+    local state_json_string="$3" # Accept state as a string
+
+    # Redirect stdout to a log file for this container's check
     exec &> "$results_dir/$container_name_or_id.log"
+
     print_message "${COLOR_BLUE}Container:${COLOR_RESET} ${container_name_or_id}" "INFO"
     local inspect_json; inspect_json=$(docker inspect "$container_name_or_id" 2>/dev/null)
     if [ -z "$inspect_json" ]; then
@@ -980,29 +984,48 @@ perform_checks_for_container() {
         echo "Not Found" > "$results_dir/$container_name_or_id.issues"
         return
     fi
-    local container_actual_name stats_json cpu_percent mem_percent
-    container_actual_name=$(jq -r '.[0].Name' <<< "$inspect_json" | sed 's|^/||')
-    stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name_or_id" 2>/dev/null)
-    cpu_percent="N/A"; mem_percent="N/A"
+
+    local container_actual_name; container_actual_name=$(jq -r '.[0].Name' <<< "$inspect_json" | sed 's|^/||')
+    local current_restart_count; current_restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_json")
+    echo "$current_restart_count" > "$results_dir/$container_actual_name.restarts" # Save current restart count
+
+    local stats_json; stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name_or_id" 2>/dev/null)
+    local cpu_percent="N/A"; local mem_percent="N/A"
     if [ -n "$stats_json" ]; then
         cpu_percent=$(jq -r '.CPUPerc // "N/A"' <<< "$stats_json" | tr -d '%')
         mem_percent=$(jq -r '.MemPerc // "N/A"' <<< "$stats_json" | tr -d '%')
     else
         print_message "  ${COLOR_BLUE}Stats:${COLOR_RESET} Could not retrieve stats for '$container_actual_name'." "WARNING"
     fi
+
     local issue_tags=()
     check_container_status "$container_actual_name" "$inspect_json" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Status"); fi
-    check_container_restarts "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
+    # Pass the state JSON string as the third argument
+    check_container_restarts "$container_actual_name" "$inspect_json" "$state_json_string"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
     check_resource_usage "$container_actual_name" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Resources"); fi
     check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
     check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
+
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
-    local update_details
-    update_details=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update")
-    if [ $? -ne 0 ]; then
+
+    # Capture all output to determine if the check was cached, and pass the state string
+    local update_output; update_output=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update" "$state_json_string" 2>&1)
+    local update_exit_code=$?
+    local update_details; update_details=$(echo "$update_output" | tail -n 1) # Message is always last line
+
+    if [ "$update_exit_code" -ne 0 ]; then
         issue_tags+=("$update_details")
     fi
+
+    # If not, it was a live check and the result should be cached for next time.
+    if ! echo "$update_output" | grep -q "(cached)"; then
+        local cache_key; cache_key=$(echo "$current_image_ref_for_update" | sed 's/[/:]/_/g')
+        jq -n --arg key "$cache_key" --arg msg "$update_details" --argjson code "$update_exit_code" \
+          '{key: $key, data: {message: $msg, exit_code: $code, timestamp: now}}' > "$results_dir/$container_actual_name.update_cache"
+    fi
+
     check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
+
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
     fi
