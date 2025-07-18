@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.30-rc1"
+VERSION="v0.30-rc"
 VERSION_DATE="2025-07-18"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -590,26 +590,31 @@ self_update() {
 
 run_with_retry() {
     local max_attempts=3
-    local attempt=1
-    local exit_code
+    local attempt=0
+    local exit_code=0
 
-    while true; do
-        "$@"
-        exit_code=$?
+    # Hide stdout of the command, but show stderr on failure
+    # Pass stdout through on success
+    local output
+    output=$("$@" 2> >(tee /dev/stderr))
+    exit_code=$?
 
-        if [ $exit_code -eq 0 ]; then
-            return 0
-        fi
-
-        if [ $attempt -ge $max_attempts ]; then
-            return $exit_code
-        fi
-
-        local sleep_time=$((2**attempt))
-        print_message "Command failed. Retrying in ${sleep_time}s... (Attempt $((attempt + 1))/${max_attempts})" "WARNING" >&2
-        sleep "$sleep_time"
+    while [ $exit_code -ne 0 ] && [ $attempt -lt $max_attempts ]; do
         attempt=$((attempt + 1))
+        local sleep_time=$((2**attempt))
+        print_message "Command failed. Retrying in ${sleep_time}s... (Attempt ${attempt}/${max_attempts})" "WARNING"
+        sleep "$sleep_time"
+        output=$("$@" 2> >(tee /dev/stderr))
+        exit_code=$?
     done
+
+    if [ $exit_code -ne 0 ]; then
+        print_message "Command failed after $max_attempts attempts." "DANGER"
+    fi
+
+    # Print the final output from the command
+    echo "$output"
+    return $exit_code
 }
 
 check_container_status() {
@@ -808,7 +813,7 @@ check_for_updates() {
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-        local skopeo_output; skopeo_output=$(run_with_retry skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1)
+        local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1)
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
@@ -823,7 +828,7 @@ check_for_updates() {
         fi
     fi
 
-    local latest_stable_version; latest_stable_version=$(run_with_retry skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+    local latest_stable_version; latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
