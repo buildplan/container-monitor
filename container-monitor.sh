@@ -150,6 +150,11 @@ load_configuration() {
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
     set_final_config "NOTIFY_ON"                     ".notifications.notify_on"              "Updates,Logs,Status,Restarts,Resources,Disk,Network"
     set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
+    set_final_config "DOCKER_USERNAME"               ".auth.docker_username"                 ""
+    set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
+
+    mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+
 
     # Validate NOTIFICATION_CHANNEL
     if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
@@ -453,7 +458,7 @@ send_discord_notification() {
                     }]
                   }')
 
-    curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
+    run_with_retry curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
 }
 
 send_ntfy_notification() {
@@ -487,7 +492,7 @@ send_ntfy_notification() {
     fi
 
     curl_opts+=("-d" "$message")
-    curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
+    run_with_retry curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
 
 send_notification() {
@@ -562,6 +567,35 @@ self_update() {
 
     print_message "Update successful. Please run the script again." "GOOD"
     exit 0
+}
+
+run_with_retry() {
+    local max_attempts=3
+    local attempt=0
+    local exit_code=0
+
+    # Hide stdout of the command, but show stderr on failure
+    # Pass stdout through on success
+    local output
+    output=$("$@" 2> >(tee /dev/stderr))
+    exit_code=$?
+
+    while [ $exit_code -ne 0 ] && [ $attempt -lt $max_attempts ]; do
+        attempt=$((attempt + 1))
+        local sleep_time=$((2**attempt))
+        print_message "Command failed. Retrying in ${sleep_time}s... (Attempt ${attempt}/${max_attempts})" "WARNING"
+        sleep "$sleep_time"
+        output=$("$@" 2> >(tee /dev/stderr))
+        exit_code=$?
+    done
+
+    if [ $exit_code -ne 0 ]; then
+        print_message "Command failed after $max_attempts attempts." "DANGER"
+    fi
+
+    # Print the final output from the command
+    echo "$output"
+    return $exit_code
 }
 
 check_container_status() {
@@ -748,6 +782,11 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
 
+    local skopeo_opts=()
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
+    fi
+
     get_release_url() {
         yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"
     }
@@ -755,7 +794,7 @@ check_for_updates() {
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-        local skopeo_output; skopeo_output=$(skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
+        local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1) # Use opts
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
@@ -770,7 +809,7 @@ check_for_updates() {
         fi
     fi
 
-    local latest_stable_version; latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+    local latest_stable_version; latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
     if [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
@@ -786,12 +825,25 @@ check_for_updates() {
     fi
 }
 
+# --- Replace the check_logs function ---
+
 check_logs() {
     local container_name="$1"; local print_to_stdout="${2:-false}"; local filter_errors="${3:-false}"; local raw_logs
     raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
     if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER"; return 1; fi
+
+    local error_regex
+    if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
+        # Build regex from custom patterns in config.yml
+        error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]}")
+        error_regex="${error_regex%|}" # Remove trailing pipe
+    else
+        # Fallback to default patterns
+        error_regex='error|panic|fail|fatal'
+    fi
+
     if [ -n "$raw_logs" ]; then
-        if echo "$raw_logs" | grep -q -i -E 'error|panic|fail|fatal'; then
+        if echo "$raw_logs" | grep -q -i -E "$error_regex"; then # Use the new regex
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Potential errors/warnings found in recent logs." "WARNING"; return 1
         else
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no obvious widespread errors found." "GOOD"; return 0
@@ -1071,9 +1123,14 @@ main() {
         SUMMARY_ONLY_MODE=true
     fi
 
-    # 6. Print the header box for manual runs
+    # 6. Print the header box for manual runs, checking for terminal compatibility
     if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
-        print_header_box
+        if [ -t 1 ] && tput colors &>/dev/null && [ "$(tput colors)" -ge 8 ]; then
+            print_header_box
+        else
+            # Simple fallback for incompatible terminals
+            echo "--- Container Monitor ${VERSION} ---"
+        fi
     fi
 
     # --- Initialize arrays for this run ---
@@ -1180,6 +1237,12 @@ main() {
     # --- Run Monitoring ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
+
+        # Stale lock file cleanup: If lock file is older than 60 minutes, remove it.
+        if [ -f "$LOCK_FILE" ] && [[ $(find "$LOCK_FILE" -mmin +60) ]]; then
+            print_message "Removing stale lock file older than 60 minutes." "WARNING"
+            rm -f "$LOCK_FILE"
+        fi
 
         # Acquire lock before reading and writing state
         # This loop waits for up to 10 seconds to acquire the lock
