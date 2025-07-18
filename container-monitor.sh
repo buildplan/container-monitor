@@ -1032,6 +1032,7 @@ print_summary() { # Uses print_message with FORCE_STDOUT
       if [[ "$already_printed" -eq 1 ]]; then continue; fi
       printed_containers+=("$container_name_summary")
       issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
+      local display_issues="${issues//|/, }"
       issue_emoji="❌" 
       if [[ "$issues" == *"Status"* ]]; then issue_emoji="🛑";
       elif [[ "$issues" == *"Restarts"* ]]; then issue_emoji="🔥";
@@ -1040,7 +1041,7 @@ print_summary() { # Uses print_message with FORCE_STDOUT
       elif [[ "$issues" == *"Resources"* ]]; then issue_emoji="📈";
       elif [[ "$issues" == *"Disk"* ]]; then issue_emoji="💾";
       elif [[ "$issues" == *"Network"* ]]; then issue_emoji="🌐"; fi
-      print_message "- ${container_name_summary} ${issue_emoji} (${COLOR_BLUE}Issues:${COLOR_RESET} ${issues})" "WARNING"
+      print_message "- ${container_name_summary} ${issue_emoji} (${COLOR_BLUE}Issues:${COLOR_RESET} ${display_issues})" "WARNING"
     done
   else
     print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
