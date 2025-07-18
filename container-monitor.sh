@@ -1020,8 +1020,8 @@ perform_checks_for_container() {
     # If not, it was a live check and the result should be cached for next time.
     if ! echo "$update_output" | grep -q "(cached)"; then
         local cache_key; cache_key=$(echo "$current_image_ref_for_update" | sed 's/[/:]/_/g')
-        jq -n --arg key "$cache_key" --arg msg "$update_details" --argjson code "$update_exit_code" \
-          '{key: $key, data: {message: $msg, exit_code: $code, timestamp: now}}' > "$results_dir/$container_actual_name.update_cache"
+	jq -n --arg key "$cache_key" --arg msg "$update_details" --argjson code "$update_exit_code" \
+	  '{key: $key, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
 
     check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
