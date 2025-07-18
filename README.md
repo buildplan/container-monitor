@@ -126,7 +126,7 @@ You can override any setting from the YAML file by exporting an environment vari
 | `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
 
 
-    > **Tip:** To find the names of your running containers, use the command `docker ps --format '{{.Names}}'`. You can then add the names you want to monitor to the `monitor_defaults` list in your `config.yml` file.
+**Tip:** To find the names of your running containers, use the command `docker ps --format '{{.Names}}'`. You can then add the names you want to monitor to the `monitor_defaults` list in your `config.yml` file.
 
 -----
 
