@@ -25,7 +25,7 @@
 #
 # Usage:
 #   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
-#   ./container-monitor.sh --interactive-update      		- Interactively choose which containers to update.
+#   ./container-monitor.sh --pull      			- Interactively choose which containers to update.
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
@@ -1140,7 +1140,7 @@ main() {
     fi
 
     # 5. Determine script mode before printing header
-    if [[ " ${initial_args[*]} " =~ " --interactive-update " ]]; then
+    if [[ " ${initial_args[*]} " =~ " --pull " ]]; then
         INTERACTIVE_UPDATE_MODE=true
     fi
     if [[ " ${initial_args[*]} " =~ " summary " ]]; then
@@ -1170,7 +1170,7 @@ main() {
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 ;;
             # Ignore flags already processed
-            --no-update|--interactive-update|summary)
+            --no-update|--pull|summary)
                 ;;
             *)
                 remaining_args+=("$arg")
