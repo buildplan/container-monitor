@@ -45,8 +45,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.22"
-VERSION_DATE="2025-07-17"
+VERSION="v0.23"
+VERSION_DATE="2025-07-18"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -975,7 +975,7 @@ perform_checks_for_container() {
     fi
     check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
     if [ ${#issue_tags[@]} -gt 0 ]; then
-        (IFS=,; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
+        (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
     fi
 }
 
@@ -1193,22 +1193,30 @@ main() {
             IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
-                local filtered_issues=""
-                IFS=',' read -r -a issue_array <<< "$issues"
+                local filtered_issues_array=() # Use an array to store filtered issues
+
+                # Use the pipe delimiter to correctly split the issues
+                IFS='|' read -r -a issue_array <<< "$issues"
+
                 for issue in "${issue_array[@]}"; do
                     for notify_issue in "${notify_on_array[@]}"; do
                         # Handle Updates specially since it contains additional details
                         if [[ "${notify_issue,,}" == "updates" && "$issue" == Update* ]] || [[ "${issue,,}" == "${notify_issue,,}" ]]; then
-                            filtered_issues+="$issue,"
+                            filtered_issues_array+=("$issue") # Add the full issue to the array
                             notify_issues=true
+                            break # Found a match, move to the next issue
                         fi
                     done
                 done
-                if [ -n "$filtered_issues" ]; then
-                    filtered_issues="${filtered_issues%,}"
-                    summary_message+="\n[$container]\n- $filtered_issues\n"
+
+                if [ ${#filtered_issues_array[@]} -gt 0 ]; then
+                    # Join the array elements with a comma for the final message
+                    local filtered_issues_str
+                    filtered_issues_str=$(IFS=, ; echo "${filtered_issues_array[*]}")
+                    summary_message+="\n[$container]\n- $filtered_issues_str\n"
                 fi
             done
+
             if [ "$notify_issues" = true ]; then
                 summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
                 if [ -n "$summary_message" ]; then
