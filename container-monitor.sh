@@ -154,7 +154,8 @@ load_configuration() {
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
 
-    if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
+    if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>&1); then
+        print_message "Failed to parse log error patterns. Using defaults." "WARNING"
         LOG_ERROR_PATTERNS=()
     fi
 
@@ -476,10 +477,12 @@ send_ntfy_notification() {
     local icon_url; icon_url=$(get_config_val ".notifications.ntfy.icon_url")
     local click_url; click_url=$(get_config_val ".notifications.ntfy.click_url")
 
+
     if [[ -n "$priority" && ! "$priority" =~ ^[1-5]$ ]]; then
-        print_message "Invalid ntfy priority '$priority' in config.yml. Must be between 1-5." "WARNING"
+        print_message "Invalid ntfy priority '$priority' in config.yml. Must be 1-5. Using default." "WARNING"
         priority="" # Clear the invalid value
     fi
+    priority=${priority:-3}
     if [[ -n "$icon_url" && ! "$icon_url" =~ ^https?:// ]]; then
         print_message "Invalid ntfy icon_url '$icon_url' in config.yml. Must be a valid URL." "WARNING"
         icon_url=""
@@ -1271,7 +1274,7 @@ main() {
         while ! ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; do
             local current_time; current_time=$(date +%s)
             if (( (current_time - lock_start_time) >= LOCK_TIMEOUT_SECONDS )); then
-                print_message "Could not acquire lock after $LOCK_TIMEOUT_SECONDS seconds. Another instance may be running." "DANGER"
+                print_message "Could not acquire lock '$LOCK_FILE' for state update after $LOCK_TIMEOUT_SECONDS seconds. Another instance may be running." "DANGER"
                 exit 1
             fi
             sleep 1
