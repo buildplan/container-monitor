@@ -844,6 +844,8 @@ check_for_updates() {
     fi
 }
 
+# --- Replace the check_logs function ---
+
 check_logs() {
     local container_name="$1"; local print_to_stdout="${2:-false}"; local filter_errors="${3:-false}"; local raw_logs
     raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
@@ -1085,11 +1087,12 @@ perform_checks_for_container() {
     check_container_restarts "$container_actual_name" "$inspect_json" "$state_json_string"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
     check_resource_usage "$container_actual_name" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Resources"); fi
     check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
-    check_network "$container_name_or_id"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
+    check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
 
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
 
-    local update_output; update_output=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update" "$state_json_string")
+    # Capture all output to determine if the check was cached, and pass the state string
+    local update_output; update_output=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update" "$state_json_string" 2>&1)
     local update_exit_code=$?
     local update_details; update_details=$(echo "$update_output" | tail -n 1) # Message is always last line
 
@@ -1097,7 +1100,7 @@ perform_checks_for_container() {
         issue_tags+=("$update_details")
     fi
 
-    # If the check wasn't cached, it was a live check and the result should be cached for next time.
+    # If not, it was a live check and the result should be cached for next time.
     if ! echo "$update_output" | grep -q "(cached)"; then
         local cache_key; cache_key=$(echo "$current_image_ref_for_update" | sed 's/[/:]/_/g')
 	jq -n --arg key "$cache_key" --arg msg "$update_details" --argjson code "$update_exit_code" \
