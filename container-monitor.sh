@@ -880,7 +880,7 @@ save_logs() {
     fi
 }
 
-check_host_disk_usage() { # Echos output, does not call print_message directl
+check_host_disk_usage() { # Echos output, does not call print_message directly
     local target_filesystem="${HOST_DISK_CHECK_FILESYSTEM:-/}"
     local usage_line size_hr used_hr avail_hr capacity
     local output_string
