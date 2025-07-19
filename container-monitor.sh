@@ -25,14 +25,14 @@
 #
 # Usage:
 #   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
-#   ./container-monitor.sh --interactive-update      		- Interactively choose which containers to update.
+#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
+#   ./container-monitor.sh --pull      				- Choose which containers to update (only pull new image, manually recreate)
+#   ./container-monitor.sh --recreate                           - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
-#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
-#   ./docker-container-monitor.sh logs <container_name>     	- Show logs for a specific container
-#   ./docker-container-monitor.sh logs errors <container_name> 	- Show errors in logs for a specific container
+#   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
 #   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
 #
@@ -45,8 +45,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.23"
-VERSION_DATE="2025-07-18"
+VERSION="v0.30"
+VERSION_DATE="2025-07-19"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -63,11 +63,15 @@ COLOR_BLUE=$'\033[0;34m'
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
 INTERACTIVE_UPDATE_MODE=false
+RECREATE_MODE=false
 UPDATE_SKIPPED=false
 
 # --- Get path to script directory ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export SCRIPT_DIR
+
+STATE_FILE="$SCRIPT_DIR/.monitor_state.json"
+LOCK_FILE="$SCRIPT_DIR/.monitor_state.lock"
 
 # --- Script Default Configuration Values ---
 _SCRIPT_DEFAULT_LOG_LINES_TO_CHECK=20
@@ -103,6 +107,11 @@ declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 load_configuration() {
     _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
+
+    if [ -f "$_CONFIG_FILE_PATH" ] && ! yq e '.' "$_CONFIG_FILE_PATH" >/dev/null 2>&1; then
+        print_message "Invalid syntax in config.yml. Please check the file for errors." "DANGER"
+        exit 1
+    fi
 
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
@@ -141,6 +150,15 @@ load_configuration() {
     set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
     set_final_config "NOTIFY_ON"                     ".notifications.notify_on"              "Updates,Logs,Status,Restarts,Resources,Disk,Network"
+    set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
+    set_final_config "DOCKER_USERNAME"               ".auth.docker_username"                 ""
+    set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
+    set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
+
+    if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>&1); then
+        print_message "Failed to parse log error patterns. Using defaults." "WARNING"
+        LOG_ERROR_PATTERNS=()
+    fi
 
     # Validate NOTIFICATION_CHANNEL
     if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
@@ -444,7 +462,7 @@ send_discord_notification() {
                     }]
                   }')
 
-    curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
+    run_with_retry curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
 }
 
 send_ntfy_notification() {
@@ -459,6 +477,22 @@ send_ntfy_notification() {
     local priority; priority=$(get_config_val ".notifications.ntfy.priority")
     local icon_url; icon_url=$(get_config_val ".notifications.ntfy.icon_url")
     local click_url; click_url=$(get_config_val ".notifications.ntfy.click_url")
+
+
+    if [[ -n "$priority" && ! "$priority" =~ ^[1-5]$ ]]; then
+        print_message "Invalid ntfy priority '$priority' in config.yml. Must be 1-5. Using default." "WARNING"
+        priority="" # Clear the invalid value
+    fi
+    priority=${priority:-3}
+    if [[ -n "$icon_url" && ! "$icon_url" =~ ^https?:// ]]; then
+        print_message "Invalid ntfy icon_url '$icon_url' in config.yml. Must be a valid URL." "WARNING"
+        icon_url=""
+    fi
+    if [[ -n "$click_url" && ! "$click_url" =~ ^https?:// ]]; then
+        print_message "Invalid ntfy click_url '$click_url' in config.yml. Must be a valid URL." "WARNING"
+        click_url=""
+    fi
+
     local curl_opts=()
     curl_opts+=("-s")
     curl_opts+=("-H" "Title: $title")
@@ -478,7 +512,7 @@ send_ntfy_notification() {
     fi
 
     curl_opts+=("-d" "$message")
-    curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
+    run_with_retry curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
 
 send_notification() {
@@ -555,6 +589,35 @@ self_update() {
     exit 0
 }
 
+run_with_retry() {
+    local max_attempts=3
+    local attempt=0
+    local exit_code=0
+
+    # Hide stdout of the command, but show stderr on failure
+    # Pass stdout through on success
+    local output
+    output=$("$@" 2> >(tee /dev/stderr))
+    exit_code=$?
+
+    while [ $exit_code -ne 0 ] && [ $attempt -lt $max_attempts ]; do
+        attempt=$((attempt + 1))
+        local sleep_time=$((2**attempt))
+        print_message "Command failed. Retrying in ${sleep_time}s... (Attempt ${attempt}/${max_attempts})" "WARNING"
+        sleep "$sleep_time"
+        output=$("$@" 2> >(tee /dev/stderr))
+        exit_code=$?
+    done
+
+    if [ $exit_code -ne 0 ]; then
+        print_message "Command failed after $max_attempts attempts." "DANGER"
+    fi
+
+    # Print the final output from the command
+    echo "$output"
+    return $exit_code
+}
+
 check_container_status() {
     local container_name="$1"; local inspect_data="$2"; local cpu_for_status_msg="$3"; local mem_for_status_msg="$4"
     local status health_status detailed_health
@@ -580,11 +643,27 @@ check_container_status() {
 }
 
 check_container_restarts() {
-    local container_name="$1"; local inspect_data="$2"; local restart_count is_restarting
-    restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_data"); is_restarting=$(jq -r '.[0].State.Restarting' <<< "$inspect_data")
-    if [ "$is_restarting" = "true" ]; then print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container '$container_name' is currently restarting." "WARNING"; return 1; fi
-    if [ "$restart_count" -gt 0 ]; then print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container '$container_name' has restarted $restart_count times." "WARNING"; return 1; fi
-    print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} No unexpected restarts detected for '$container_name'." "GOOD"; return 0
+    local container_name="$1"; local inspect_data="$2"
+    local saved_restart_counts_json="$3" # accept saved state as an argument
+
+    local current_restart_count is_restarting
+    current_restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_data")
+    is_restarting=$(jq -r '.[0].State.Restarting' <<< "$inspect_data")
+
+    # Get the previously saved restart count from the JSON state
+    local saved_restart_count
+    saved_restart_count=$(jq -r --arg name "$container_name" '.restarts[$name] // 0' <<< "$saved_restart_counts_json")
+
+    # Check for restart loops
+    if [ "$is_restarting" = "true" ]; then
+        print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container is currently restarting." "WARNING"; return 1
+    fi
+    # Check if the restart count has increased
+    if [ "$current_restart_count" -gt "$saved_restart_count" ]; then
+        print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container has restarted (total: $current_restart_count)." "WARNING"; return 1
+    fi
+
+    print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} No new restarts detected (total: $current_restart_count)." "GOOD"; return 0
 }
 
 check_resource_usage() {
@@ -671,6 +750,7 @@ check_network() {
 
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
+    local state_json="$3" # Accept full state JSON
 
     # 1. Prerequisite and Initial Checks
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
@@ -678,7 +758,30 @@ check_for_updates() {
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
 
-    # 2. Extract Image Name and Tag
+    # 2. Check for a valid cache entry first
+    local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g') # Create a valid JSON key
+    local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
+
+    if [ -n "$cached_entry" ]; then
+        local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
+        local current_ts; current_ts=$(date +%s)
+        local cache_age_sec=$((current_ts - cached_ts))
+        local cache_max_age_sec=$((UPDATE_CHECK_CACHE_HOURS * 3600))
+
+        if [ "$cache_age_sec" -lt "$cache_max_age_sec" ]; then
+            local cached_msg; cached_msg=$(jq -r '.message' <<< "$cached_entry")
+            local cached_code; cached_code=$(jq -r '.exit_code' <<< "$cached_entry")
+            if [ "$cached_code" -ne 0 ]; then
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} ${cached_msg} (cached)" "WARNING" >&2
+                echo "$cached_msg"
+            else
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date (cached)." "GOOD" >&2
+            fi
+            return "$cached_code"
+        fi
+    fi
+
+    # 3. If no valid cache, perform a live check
     local current_tag="latest"
     local image_name_no_tag="$current_image_ref"
     if [[ "$current_image_ref" == *":"* ]]; then
@@ -686,7 +789,6 @@ check_for_updates() {
         image_name_no_tag="${current_image_ref%:$current_tag}"
     fi
 
-    # 3. Construct the base repository path for skopeo
     local registry_host="registry-1.docker.io"
     local image_path_for_skopeo="$image_name_no_tag"
     if [[ "$image_name_no_tag" == *"/"* ]]; then
@@ -700,25 +802,20 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
 
+    local skopeo_opts=()
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
+    fi
+
     get_release_url() {
-        local image_to_check="$1"
-        local config_file="$SCRIPT_DIR/config.yml"
-
-        if [ ! -f "$config_file" ]; then
-            return
-        fi
-
-        yq e ".containers.release_urls.\"${image_to_check}\" // \"\"" "$config_file"
+        yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"
     }
 
-    # 4. Handle 'latest' tag by comparing digests
     if [ "$current_tag" == "latest" ]; then
         local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
         if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-
-        local skopeo_output; skopeo_output=$(skopeo inspect "${skopeo_repo_ref}:latest" 2>&1)
+        local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1)
         if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
-
         local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
         if [ "$remote_digest" != "$local_digest" ]; then
             local summary_message="Update available for 'latest' tag"
@@ -732,13 +829,10 @@ check_for_updates() {
         fi
     fi
 
-    # 5. Handle versioned tags
-    local latest_stable_version; latest_stable_version=$(skopeo list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+    local latest_stable_version; latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
     if [ -z "$latest_stable_version" ]; then
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2
-        return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
     fi
-
     if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
         local summary_message="Update available: ${latest_stable_version}"
         local release_url; release_url=$(get_release_url "$image_name_no_tag")
@@ -747,8 +841,7 @@ check_for_updates() {
         echo "$summary_message"
         return 1
     else
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2
-        return 0
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2; return 0
     fi
 }
 
@@ -756,8 +849,19 @@ check_logs() {
     local container_name="$1"; local print_to_stdout="${2:-false}"; local filter_errors="${3:-false}"; local raw_logs
     raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
     if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER"; return 1; fi
+
+    local error_regex
+    if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
+        # Build regex from custom patterns in config.yml
+        error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]}")
+        error_regex="${error_regex%|}"
+    else
+        # Fallback to default patterns
+        error_regex='error|panic|fail|fatal'
+    fi
+
     if [ -n "$raw_logs" ]; then
-        if echo "$raw_logs" | grep -q -i -E 'error|panic|fail|fatal'; then
+        if echo "$raw_logs" | grep -q -i -E "$error_regex"; then # Use the new regex
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Potential errors/warnings found in recent logs." "WARNING"; return 1
         else
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no obvious widespread errors found." "GOOD"; return 0
@@ -818,6 +922,12 @@ pull_new_image() {
     local container_name_to_update="$1"
     print_message "Getting image details for '$container_name_to_update'..." "INFO"
 
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        if ! echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin >/dev/null 2>&1; then
+            print_message "Failed to login to Docker registry. Please check credentials." "DANGER"
+        fi
+    fi
+
     local current_image_ref
     current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
     if [ -z "$current_image_ref" ]; then
@@ -832,6 +942,39 @@ pull_new_image() {
     else
         print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
     fi
+}
+
+recreate_container() {
+    local container_name="$1"
+    print_message "Starting full update for '$container_name'..." "INFO"
+
+    # 1. Check if the container was started with docker-compose by inspecting its labels.
+    local working_dir
+    working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
+
+    if [ -z "$working_dir" ]; then
+        print_message "Cannot auto-recreate '$container_name'. It does not appear to be managed by docker-compose (missing required labels). Please update it manually." "DANGER"
+        return 1
+    fi
+
+    # 2. Run the commands from the correct directory inside a subshell to not affect the script's path
+    (
+        cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
+
+        print_message "Running 'docker compose pull' in '$working_dir'..." "INFO"
+        if ! docker compose pull "$container_name"; then
+            print_message "Failed to pull new image for '$container_name' in '$working_dir'." "DANGER"
+            exit 1
+        fi
+
+        print_message "Running 'docker compose up -d --force-recreate'..." "INFO"
+        if ! docker compose up -d --force-recreate "$container_name"; then
+            print_message "Failed to recreate '$container_name'." "DANGER"
+            exit 1
+        fi
+
+        print_message "Container '$container_name' successfully updated and recreated. ✅" "GOOD"
+    )
 }
 
 run_interactive_update_mode() {
@@ -879,20 +1022,29 @@ run_interactive_update_mode() {
     fi
 
     # 6. Process the choice and pull images
-    if [ "$choice" == "all" ]; then
-        for container_to_update in "${containers_with_updates[@]}"; do
-            pull_new_image "$container_to_update"
-        done
-    else
-        IFS=',' read -r -a selections <<< "$choice"
-        for sel in "${selections[@]}"; do
-            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
-                pull_new_image "${containers_with_updates[$((sel - 1))]}"
+        local containers_to_process=()
+        if [ "$choice" == "all" ]; then
+            containers_to_process=("${containers_with_updates[@]}")
+        else
+            IFS=',' read -r -a selections <<< "$choice"
+            for sel in "${selections[@]}"; do
+                if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+                    containers_to_process+=("${containers_with_updates[$((sel - 1))]}")
+                else
+                    print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+                fi
+            done
+        fi
+
+        for container_to_update in "${containers_to_process[@]}"; do
+            if [ "$RECREATE_MODE" = true ]; then
+                # If --recreate was used, call the new function
+                recreate_container "$container_to_update"
             else
-                print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+                # Otherwise, call the original pull function
+                pull_new_image "$container_to_update"
             fi
         done
-    fi
 
     print_message "Interactive update process finished." "INFO"
 }
@@ -921,6 +1073,7 @@ print_summary() { # Uses print_message with FORCE_STDOUT
       if [[ "$already_printed" -eq 1 ]]; then continue; fi
       printed_containers+=("$container_name_summary")
       issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
+      local display_issues="${issues//|/, }"
       issue_emoji="❌" 
       if [[ "$issues" == *"Status"* ]]; then issue_emoji="🛑";
       elif [[ "$issues" == *"Restarts"* ]]; then issue_emoji="🔥";
@@ -929,7 +1082,7 @@ print_summary() { # Uses print_message with FORCE_STDOUT
       elif [[ "$issues" == *"Resources"* ]]; then issue_emoji="📈";
       elif [[ "$issues" == *"Disk"* ]]; then issue_emoji="💾";
       elif [[ "$issues" == *"Network"* ]]; then issue_emoji="🌐"; fi
-      print_message "- ${container_name_summary} ${issue_emoji} (${COLOR_BLUE}Issues:${COLOR_RESET} ${issues})" "WARNING"
+      print_message "- ${container_name_summary} ${issue_emoji} (${COLOR_BLUE}Issues:${COLOR_RESET} ${display_issues})" "WARNING"
     done
   else
     print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
@@ -943,7 +1096,11 @@ print_summary() { # Uses print_message with FORCE_STDOUT
 perform_checks_for_container() {
     local container_name_or_id="$1"
     local results_dir="$2"
+    local state_json_string="$CURRENT_STATE_JSON_STRING" # Read state from environment
+
+    # Redirect stdout to a log file for this container's check
     exec &> "$results_dir/$container_name_or_id.log"
+
     print_message "${COLOR_BLUE}Container:${COLOR_RESET} ${container_name_or_id}" "INFO"
     local inspect_json; inspect_json=$(docker inspect "$container_name_or_id" 2>/dev/null)
     if [ -z "$inspect_json" ]; then
@@ -951,29 +1108,48 @@ perform_checks_for_container() {
         echo "Not Found" > "$results_dir/$container_name_or_id.issues"
         return
     fi
-    local container_actual_name stats_json cpu_percent mem_percent
-    container_actual_name=$(jq -r '.[0].Name' <<< "$inspect_json" | sed 's|^/||')
-    stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name_or_id" 2>/dev/null)
-    cpu_percent="N/A"; mem_percent="N/A"
+
+    local container_actual_name; container_actual_name=$(jq -r '.[0].Name' <<< "$inspect_json" | sed 's|^/||')
+    local current_restart_count; current_restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_json")
+    echo "$current_restart_count" > "$results_dir/$container_actual_name.restarts" # Save current restart count
+
+    local stats_json; stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name_or_id" 2>/dev/null)
+    local cpu_percent="N/A"; local mem_percent="N/A"
     if [ -n "$stats_json" ]; then
         cpu_percent=$(jq -r '.CPUPerc // "N/A"' <<< "$stats_json" | tr -d '%')
         mem_percent=$(jq -r '.MemPerc // "N/A"' <<< "$stats_json" | tr -d '%')
     else
         print_message "  ${COLOR_BLUE}Stats:${COLOR_RESET} Could not retrieve stats for '$container_actual_name'." "WARNING"
     fi
+
     local issue_tags=()
     check_container_status "$container_actual_name" "$inspect_json" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Status"); fi
-    check_container_restarts "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
+    # Pass the state JSON string as the third argument
+    check_container_restarts "$container_actual_name" "$inspect_json" "$state_json_string"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
     check_resource_usage "$container_actual_name" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Resources"); fi
     check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
     check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
+
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
-    local update_details
-    update_details=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update")
-    if [ $? -ne 0 ]; then
+
+    # Capture all output to determine if the check was cached, and pass the state string
+    local update_output; update_output=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update" "$state_json_string" 2>&1)
+    local update_exit_code=$?
+    local update_details; update_details=$(echo "$update_output" | tail -n 1) # Message is always last line
+
+    if [ "$update_exit_code" -ne 0 ]; then
         issue_tags+=("$update_details")
     fi
+
+    # If not, it was a live check and the result should be cached for next time.
+    if ! echo "$update_output" | grep -q "(cached)"; then
+        local cache_key; cache_key=$(echo "$current_image_ref_for_update" | sed 's/[/:]/_/g')
+	jq -n --arg key "$cache_key" --arg msg "$update_details" --argjson code "$update_exit_code" \
+	  '{key: $key, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
+    fi
+
     check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
+
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
     fi
@@ -1007,16 +1183,21 @@ main() {
     fi
 
     # 5. Determine script mode before printing header
-    if [[ " ${initial_args[*]} " =~ " --interactive-update " ]]; then
+    if [[ " ${initial_args[*]} " =~ " --pull " ]]; then
         INTERACTIVE_UPDATE_MODE=true
     fi
     if [[ " ${initial_args[*]} " =~ " summary " ]]; then
         SUMMARY_ONLY_MODE=true
     fi
 
-    # 6. Print the header box for manual runs
+    # 6. Print the header box for manual runs, checking for terminal compatibility
     if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
-        print_header_box
+        if [ -t 1 ] && tput colors &>/dev/null && [ "$(tput colors)" -ge 8 ]; then
+            print_header_box
+        else
+            # Simple fallback for incompatible terminals
+            echo "--- Container Monitor ${VERSION} ---"
+        fi
     fi
 
     # --- Initialize arrays for this run ---
@@ -1024,6 +1205,7 @@ main() {
     declare -a WARNING_OR_ERROR_CONTAINERS=()
     declare -A CONTAINER_ISSUES_MAP
     declare -a CONTAINERS_TO_EXCLUDE=()
+
     declare -a remaining_args=()
     for arg in "$@"; do
         case "$arg" in
@@ -1031,8 +1213,12 @@ main() {
                 local EXCLUDE_STR="${arg#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 ;;
+            --recreate)
+                RECREATE_MODE=true
+                INTERACTIVE_UPDATE_MODE=true
+                ;;
             # Ignore flags already processed
-            --no-update|--interactive-update|summary)
+            --no-update|--pull|summary)
                 ;;
             *)
                 remaining_args+=("$arg")
@@ -1051,18 +1237,33 @@ main() {
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             case "$1" in
                 logs)
-                    shift
-                    local container_to_log="${1:-all}"
-                    local filter_type="${2:-all}"
-                    if [[ "$container_to_log" == "all" ]]; then
-                        echo "Please specify a container name to view its logs."; return 1
+                    shift # Move past "logs"
+                    if [ -z "$1" ]; then
+                        print_message "Usage: $0 logs <container_name> [filter1] [filter2] ..." "DANGER"
+                        return 1
                     fi
-                    if [[ "$filter_type" == "errors" ]]; then
-                        echo "--- Showing errors for $container_to_log ---"
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
-                    else
-                        echo "--- Showing logs for $container_to_log ---"
+                    local container_to_log="$1"
+                    shift
+
+                    if [ $# -eq 0 ]; then
+                        print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
                         docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+                    else
+                        local all_args_string="$*"
+                        local processed_args_string="${all_args_string//,/' '}"
+
+                        local final_patterns=()
+                        read -r -a final_patterns <<< "$processed_args_string"
+
+                        local egrep_pattern
+                        egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
+
+                        local filter_list
+                        filter_list=$(printf "'%s' " "${final_patterns[@]}")
+
+                        print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
+
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
                     fi
                     return 0
                     ;;
@@ -1080,6 +1281,7 @@ main() {
                     CONTAINERS_TO_CHECK=("$@")
                     ;;
             esac
+
         else
             # If in summary mode, all remaining args are container names
             CONTAINERS_TO_CHECK=("$@")
@@ -1122,12 +1324,42 @@ main() {
 
     # --- Run Monitoring ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
-        local results_dir
-        results_dir=$(mktemp -d)
+        local results_dir; results_dir=$(mktemp -d)
+
+        # Stale lock file cleanup: If lock file is older than 60 minutes, remove it.
+        if [ -f "$LOCK_FILE" ] && [[ $(find "$LOCK_FILE" -mmin +60) ]]; then
+            print_message "Removing stale lock file older than 60 minutes." "WARNING"
+            rm -f "$LOCK_FILE"
+        fi
+
+        # Acquire lock, waiting up to LOCK_TIMEOUT_SECONDS
+        local lock_start_time; lock_start_time=$(date +%s)
+        while ! ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; do
+            local current_time; current_time=$(date +%s)
+            if (( (current_time - lock_start_time) >= LOCK_TIMEOUT_SECONDS )); then
+                print_message "Could not acquire lock '$LOCK_FILE' for state update after $LOCK_TIMEOUT_SECONDS seconds. Another instance may be running." "DANGER"
+                exit 1
+            fi
+            sleep 1
+        done
+        trap 'rm -f "$LOCK_FILE"' EXIT
+
+        # Ensure state file exists and has basic structure
+        if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
+            print_message "State file is missing or invalid. Creating a new one." "INFO"
+            echo '{"updates": {}, "restarts": {}}' > "$STATE_FILE"
+        fi
+        local current_state_json; current_state_json=$(cat "$STATE_FILE")
+
+        # Release lock before starting parallel jobs
+        rm -f "$LOCK_FILE"
+        trap - EXIT
+
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
                    check_resource_usage check_disk_space check_network check_for_updates check_logs
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
-               LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD NETWORK_ERROR_THRESHOLD
+               LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS
 
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
@@ -1142,7 +1374,7 @@ main() {
                     processed=$((processed + 1))
                     local percent=$((processed * 100 / total))
                     local bar_len=40
-                    local bar_filled_len=$((processed * bar_len / total))
+                    local bar_filled_len=$((processed * bar_len / total))    
                     local current_time; current_time=$(date +%s)
                     local elapsed=$((current_time - start_time))
                     local elapsed_str; elapsed_str=$(printf "%02d:%02d" $((elapsed/60)) $((elapsed%60)))
@@ -1153,14 +1385,16 @@ main() {
                     local bar_empty=""
                     for ((j=0; j< (bar_len - bar_filled_len) ; j++)); do bar_empty+="░"; done
                     printf "\r${COLOR_GREEN}Progress: [%s%s] %3d%% (%d/%d) | Elapsed: %s [${spinner_char}]${COLOR_RESET}" \
-                           "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
-                 done < progress_pipe
-                echo
+                            "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
+                done < progress_pipe
+                    echo
             ) &
             local progress_pid=$!
             exec 3> progress_pipe
         fi
 
+        # Export the state as an environment variable so it's available to sub-shells
+        export CURRENT_STATE_JSON_STRING="$current_state_json"
         printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
 
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
@@ -1187,7 +1421,8 @@ main() {
 
         print_summary
 
-	if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+        # --- Notification Logic ---
+        if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
             local notify_issues=false
             IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
@@ -1224,7 +1459,48 @@ main() {
                     send_notification "$summary_message" "$notification_title"
                 fi
             fi
+	fi
+
+        # --- UPDATE AND SAVE STATE ---
+        # Re-acquire lock to safely write the new state
+        local lock_acquired=false
+        for ((i=0; i<LOCK_TIMEOUT_SECONDS*10; i++)); do
+            if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
+                trap 'rm -f "$LOCK_FILE"' EXIT
+                lock_acquired=true
+                break
+            fi
+            sleep 0.1
+        done
+        if [ "$lock_acquired" = false ]; then
+            print_message "Could not acquire lock for state update after $LOCK_TIMEOUT_SECONDS seconds." "DANGER"
+            rm -rf "$results_dir"
+            return 1
         fi
+
+        local new_state_json="$current_state_json"
+        # Update restart counts
+        for restart_file in "$results_dir"/*.restarts; do
+            if [ -f "$restart_file" ]; then
+                local container_name; container_name=$(basename "$restart_file" .restarts)
+                local count; count=$(cat "$restart_file")
+                new_state_json=$(jq --arg name "$container_name" --argjson val "$count" '.restarts[$name] = $val' <<< "$new_state_json")
+            fi
+        done
+        # Update caches from live checks
+        for cache_update_file in "$results_dir"/*.update_cache; do
+            if [ -f "$cache_update_file" ]; then
+                local cache_data; cache_data=$(cat "$cache_update_file")
+                local key; key=$(jq -r '.key' <<< "$cache_data")
+                local data; data=$(jq -r '.data' <<< "$cache_data")
+                new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
+            fi
+        done
+
+        # Write the new state and release the lock
+        echo "$new_state_json" > "$STATE_FILE"
+        rm -f "$LOCK_FILE"
+        trap - EXIT
 
         rm -rf "$results_dir"
     fi

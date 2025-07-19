@@ -3,6 +3,25 @@
 general:
   log_lines_to_check: 40
   log_file: "docker-monitor.log"
+  update_check_cache_hours: 6 # check for new updates after 6 hours
+  lock_timeout_seconds: 30 # configurable lock timeout
+
+# Custom patterns for the log checker.
+# If this section is omitted, the script defaults to checking for:
+# error, panic, fail, fatal
+logs:
+  error_patterns:
+    - "Exception"
+    - "SEVERE"
+    - "Traceback"
+
+# Credentials for private registries.
+# It is safer to provide these using environment variables:
+# export DOCKER_USERNAME="myuser"
+# export DOCKER_PASSWORD="mypassword"
+auth:
+  docker_username: ""
+  docker_password: ""
 
 thresholds:
   cpu_warning: 80
@@ -34,11 +53,15 @@ containers:
     - "dozzle-agent"
     - "komodo-periphery"
     - "beszel-agent"
+    - "forgejo-server"
+    - "my-pgdb"
 
   # URLs for release notes, used for update checks
   release_urls:
     amir20/dozzle: "https://github.com/amir20/dozzle/releases"
     ghcr.io/moghtech/komodo-periphery: "https://github.com/moghtech/komodo/releases"
     henrygd/beszel: "https://github.com/henrygd/beszel/releases"
+    codeberg.org/forgejo/forgejo: "https://forgejo.org/releases"
+    postgres: "https://www.postgresql.org/docs/release/"
     portainer/portainer-ce: "https://github.com/portainer/portainer/releases"
     lscr.io/linuxserver/radarr: "https://github.com/lscr.io/linuxserver.io/pkgs/container/radarr"
