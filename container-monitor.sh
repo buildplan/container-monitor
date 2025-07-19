@@ -1201,12 +1201,17 @@ main() {
                         print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
                         docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
                     else
-                        local filter_patterns=("$@")
+                        local all_args_string="$*"
+                        local processed_args_string="${all_args_string//,/' '}"
+
+                        local final_patterns=()
+                        read -r -a final_patterns <<< "$processed_args_string"
+
                         local egrep_pattern
-                        egrep_pattern=$(IFS='|'; echo "${filter_patterns[*]}")
+                        egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
 
                         local filter_list
-                        filter_list=$(printf "'%s' " "${filter_patterns[@]}")
+                        filter_list=$(printf "'%s' " "${final_patterns[@]}")
 
                         print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
 
