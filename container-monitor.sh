@@ -1046,7 +1046,6 @@ run_interactive_update_mode() {
                 pull_new_image "$container_to_update"
             fi
         done
-    fi
 
     print_message "Interactive update process finished." "INFO"
 }
