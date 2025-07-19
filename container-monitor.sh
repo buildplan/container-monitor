@@ -26,13 +26,13 @@
 # Usage:
 #   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
 #   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
-#   ./container-monitor.sh --pull      				- Interactively choose which containers to update.
+#   ./container-monitor.sh --pull      				- Choose which containers to update (only pull new image, manually recreate)
+#   ./container-monitor.sh --recreate                           - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
 #   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
 #   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
-#   ./docker-container-monitor.sh logs errors <container_name> 	- Show errors in logs for a specific container
 #   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
 #
@@ -63,6 +63,7 @@ COLOR_BLUE=$'\033[0;34m'
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
 INTERACTIVE_UPDATE_MODE=false
+RECREATE_MODE=false
 UPDATE_SKIPPED=false
 
 # --- Get path to script directory ---
@@ -943,6 +944,39 @@ pull_new_image() {
     fi
 }
 
+recreate_container() {
+    local container_name="$1"
+    print_message "Starting full update for '$container_name'..." "INFO"
+
+    # 1. Check if the container was started with docker-compose by inspecting its labels.
+    local working_dir
+    working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
+
+    if [ -z "$working_dir" ]; then
+        print_message "Cannot auto-recreate '$container_name'. It does not appear to be managed by docker-compose (missing required labels). Please update it manually." "DANGER"
+        return 1
+    fi
+
+    # 2. Run the commands from the correct directory inside a subshell to not affect the script's path
+    (
+        cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
+
+        print_message "Running 'docker compose pull' in '$working_dir'..." "INFO"
+        if ! docker compose pull "$container_name"; then
+            print_message "Failed to pull new image for '$container_name' in '$working_dir'." "DANGER"
+            exit 1
+        fi
+
+        print_message "Running 'docker compose up -d --force-recreate'..." "INFO"
+        if ! docker compose up -d --force-recreate "$container_name"; then
+            print_message "Failed to recreate '$container_name'." "DANGER"
+            exit 1
+        fi
+
+        print_message "Container '$container_name' successfully updated and recreated. ✅" "GOOD"
+    )
+}
+
 run_interactive_update_mode() {
     print_message "Starting interactive update check..." "INFO"
 
@@ -988,20 +1022,29 @@ run_interactive_update_mode() {
     fi
 
     # 6. Process the choice and pull images
-    if [ "$choice" == "all" ]; then
-        for container_to_update in "${containers_with_updates[@]}"; do
-            pull_new_image "$container_to_update"
-        done
-    else
-        IFS=',' read -r -a selections <<< "$choice"
-        for sel in "${selections[@]}"; do
-            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
-                pull_new_image "${containers_with_updates[$((sel - 1))]}"
+        local containers_to_process=()
+        if [ "$choice" == "all" ]; then
+            containers_to_process=("${containers_with_updates[@]}")
+        else
+            IFS=',' read -r -a selections <<< "$choice"
+            for sel in "${selections[@]}"; do
+                if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+                    containers_to_process+=("${containers_with_updates[$((sel - 1))]}")
+                else
+                    print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+                fi
+            done
+        fi
+
+        for container_to_update in "${containers_to_process[@]}"; do
+            if [ "$RECREATE_MODE" = true ]; then
+                # If --recreate was used, call the new function
+                recreate_container "$container_to_update"
             else
-                print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+                # Otherwise, call the original pull function
+                pull_new_image "$container_to_update"
             fi
         done
-    fi
 
     print_message "Interactive update process finished." "INFO"
 }
@@ -1162,12 +1205,17 @@ main() {
     declare -a WARNING_OR_ERROR_CONTAINERS=()
     declare -A CONTAINER_ISSUES_MAP
     declare -a CONTAINERS_TO_EXCLUDE=()
+
     declare -a remaining_args=()
     for arg in "$@"; do
         case "$arg" in
             --exclude=*)
                 local EXCLUDE_STR="${arg#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+                ;;
+            --recreate)
+                RECREATE_MODE=true
+                INTERACTIVE_UPDATE_MODE=true
                 ;;
             # Ignore flags already processed
             --no-update|--pull|summary)
