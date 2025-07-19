@@ -198,22 +198,49 @@ Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│              Container Monitor v0.22                  │
-│                Updated: 2025-07-17                    │
+│              Container Monitor v0.30                  │
+│                Updated: 2025-07-19                    │
 └───────────────────────────────────────────────────────┘
 
 Starting asynchronous checks for 3 containers...
 Progress: [████████████████████████████████████████] 100% (3/3) | Elapsed: 00:05 [\]
 
 [SUMMARY] -------------------------- Host System Stats ---------------------------
-[SUMMARY]   Host Disk Usage (/): 34% used (Size: 25G, Used: 7.9G, Available: 16G)
-[SUMMARY]   Host Memory Usage: Total: 1967MB, Used: 848MB (43%), Free: 132MB
+[SUMMARY]   Host Disk Usage (/): 9% used (Size: 120G, Used: 10G, Available: 110G)
+[SUMMARY]   Host Memory Usage: Total: 7906MB, Used: 1749MB (22%), Free: 5023MB
 [SUMMARY] ------------------- Summary of Container Issues Found --------------------
 [SUMMARY] The following containers have warnings or errors:
-[WARNING] - portainer 🔄 (Issues: Update available: 2.20.1, Notes: https://github.com/portainer/portainer/releases)
-[WARNING] - dozzle 📈 (Issues: Resources)
 [WARNING] - beszel-agent 📜 (Issues: Logs)
+[WARNING] - dozzle-agent 🔄 (Issues: Update available for 'latest' tag, Notes: https://github.com/amir20/dozzle/releases)
 [SUMMARY] ------------------------------------------------------------------------
+```
+
+### Example update output
+
+```
+[INFO] Starting interactive update check...
+Checking 6 containers for available updates...
+[GOOD]   Update Check: Image 'traefik:v3.4.4' is up-to-date.
+[WARNING]   Update Check: New 'latest' image available for 'amir20/dozzle:latest'.
+[GOOD]   Update Check: Image 'crowdsecurity/crowdsec:latest' is up-to-date.
+[GOOD]   Update Check: Image 'ghcr.io/moghtech/komodo-periphery:latest' is up-to-date.
+[GOOD]   Update Check: Image 'henrygd/beszel-agent' is up-to-date.
+[INFO] The following containers have updates available:
+  [1] dozzle-agent (Update available for 'latest' tag, Notes: https://github.com/amir20/dozzle/releases)
+
+Enter the number(s) of the containers to update (e.g., '1' or '1,3'), or 'all', or press Enter to cancel: 1
+[INFO] Starting full update for 'dozzle-agent'...
+[INFO] Running 'docker compose pull' in '/home/alis/appdata/dozzle-agent'...
+[+] Pulling 5/5
+ ✔ dozzle-agent Pulled                                                                                                      3.1s 
+   ✔ d1031bc74aea Already exists                                                                                            0.0s 
+   ✔ b1453502e061 Already exists                                                                                            0.0s 
+   ✔ 4be4f422404f Pull complete                                                                                             0.7s 
+   ✔ b1ae23dd5d38 Pull complete                                                                                             1.3s 
+[INFO] Running 'docker compose up -d --force-recreate'...
+[+] Running 1/1
+ ✔ Container dozzle-agent  Started                                                                                          1.4s 
+[GOOD] Container 'dozzle-agent' successfully updated and recreated. ✅
 ```
 
 ### Logging
