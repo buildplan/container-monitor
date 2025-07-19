@@ -31,7 +31,7 @@
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
 #   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
-#   ./docker-container-monitor.sh logs <container_name>     	- Show logs for a specific container
+#   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
 #   ./docker-container-monitor.sh logs errors <container_name> 	- Show errors in logs for a specific container
 #   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
