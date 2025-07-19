@@ -199,13 +199,18 @@ Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
 ### Example Summary Output
 
 ```
-┌───────────────────────────────────────────────────────┐
-│              Container Monitor v0.30                  │
-│                Updated: 2025-07-19                    │
-└───────────────────────────────────────────────────────┘
+$ ./container-monitor.sh
+[INFO] Checking for required command-line tools...
+[GOOD] All required dependencies are installed.
+╔═══════════════════════════════════════════════════════╗
+║                Container Monitor v0.30                ║
+║                  Updated: 2025-07-19                  ║
+╚═══════════════════════════════════════════════════════╝
 
 Starting asynchronous checks for 5 containers...
-Progress: [████████████████████████████████████████] 100% (5/5) | Elapsed: 00:05 [\]
+Progress: [████████████████████████████████████████] 100% (5/5) | Elapsed: 00:15 [/]
+
+...
 
 [SUMMARY] -------------------------- Host System Stats ---------------------------
 [SUMMARY]   Host Disk Usage (/): 9% used (Size: 120G, Used: 10G, Available: 110G)
