@@ -1189,18 +1189,28 @@ main() {
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             case "$1" in
                 logs)
-                    shift
-                    local container_to_log="${1:-all}"
-                    local filter_type="${2:-all}"
-                    if [[ "$container_to_log" == "all" ]]; then
-                        echo "Please specify a container name to view its logs."; return 1
+                    shift # Move past "logs"
+                    if [ -z "$1" ]; then
+                        print_message "Usage: $0 logs <container_name> [filter1] [filter2] ..." "DANGER"
+                        return 1
                     fi
-                    if [[ "$filter_type" == "errors" ]]; then
-                        echo "--- Showing errors for $container_to_log ---"
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -i -E 'error|panic|fail|fatal'
-                    else
-                        echo "--- Showing logs for $container_to_log ---"
+                    local container_to_log="$1"
+                    shift
+
+                    if [ $# -eq 0 ]; then
+                        print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
                         docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+                    else
+                        local filter_patterns=("$@")
+                        local egrep_pattern
+                        egrep_pattern=$(IFS='|'; echo "${filter_patterns[*]}")
+
+                        local filter_list
+                        filter_list=$(printf "'%s' " "${filter_patterns[@]}")
+
+                        print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
+
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
                     fi
                     return 0
                     ;;
@@ -1218,6 +1228,7 @@ main() {
                     CONTAINERS_TO_CHECK=("$@")
                     ;;
             esac
+
         else
             # If in summary mode, all remaining args are container names
             CONTAINERS_TO_CHECK=("$@")
