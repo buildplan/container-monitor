@@ -13,7 +13,7 @@ A  Bash script to monitor Docker containers. It checks container health, resourc
   - **Asynchronous Checks**: Uses `xargs` to run checks on multiple containers in parallel for faster execution.
   - **Advanced Update Detection**: Uses `skopeo` to check for new image versions for both `:latest` and version-pinned tags.
   - **Release Note Integration**: Displays a direct link to release notes when an update is available.
-  - **Interactive Updates**: A special mode (`--pull`) to scan for all available updates and let you choose which new images to pull.
+  - **Interactive Updates**: A special mode (`--pull` or `--recreate`) to scan for all available updates and let you choose which new images to pull & recreate.
   - **Comprehensive Health Monitoring**: Checks container status, health checks (`healthy`/`unhealthy`), and restart counts.
   - **Resource & Log Scanning**: Monitors CPU, memory, disk usage, and network errors against configurable thresholds, and scans logs for error keywords.
   - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
@@ -117,7 +117,7 @@ You can override any setting from the YAML file by exporting an environment vari
 
 | Environment Variable | YAML Path | Default |
 |---|---|---|
-| `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `40` |
+| `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `20` |
 | `CPU_WARNING_THRESHOLD` | `.thresholds.cpu_warning` | `80` |
 |`UPDATE_CHECK_CACHE_HOURS`|`.general.update_check_cache_hours`|`6`|
 | `NOTIFICATION_CHANNEL` | `.notifications.channel` | `none`|
@@ -138,6 +138,8 @@ You can override any setting from the YAML file by exporting an environment vari
     `./container-monitor.sh`
   - **Run a check on specific containers:**
     `./container-monitor.sh portainer traefik`
+  - **Update and recreate containers:**
+     `./container-monitor.sh --recreate`
   - **Run a check excluding containers:**
     `./container-monitor.sh --exclude=watchtower`
   - **Run in Summary-Only Mode (for automation):**
@@ -202,8 +204,8 @@ Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
 │                Updated: 2025-07-19                    │
 └───────────────────────────────────────────────────────┘
 
-Starting asynchronous checks for 3 containers...
-Progress: [████████████████████████████████████████] 100% (3/3) | Elapsed: 00:05 [\]
+Starting asynchronous checks for 5 containers...
+Progress: [████████████████████████████████████████] 100% (5/5) | Elapsed: 00:05 [\]
 
 [SUMMARY] -------------------------- Host System Stats ---------------------------
 [SUMMARY]   Host Disk Usage (/): 9% used (Size: 120G, Used: 10G, Available: 110G)
@@ -219,7 +221,7 @@ Progress: [███████████████████████
 
 ```
 [INFO] Starting interactive update check...
-Checking 6 containers for available updates...
+Checking 5 containers for available updates...
 [GOOD]   Update Check: Image 'traefik:v3.4.4' is up-to-date.
 [WARNING]   Update Check: New 'latest' image available for 'amir20/dozzle:latest'.
 [GOOD]   Update Check: Image 'crowdsecurity/crowdsec:latest' is up-to-date.
