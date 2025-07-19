@@ -1213,10 +1213,9 @@ main() {
                 local EXCLUDE_STR="${arg#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 ;;
-            # ADD THIS NEW CASE
             --recreate)
                 RECREATE_MODE=true
-                INTERACTIVE_UPDATE_MODE=true # Recreate mode is also an interactive mode
+                INTERACTIVE_UPDATE_MODE=true
                 ;;
             # Ignore flags already processed
             --no-update|--pull|summary)
