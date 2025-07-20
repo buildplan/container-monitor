@@ -13,7 +13,7 @@ A  Bash script to monitor Docker containers. It checks container health, resourc
   - **Asynchronous Checks**: Uses `xargs` to run checks on multiple containers in parallel for faster execution.
   - **Advanced Update Detection**: Uses `skopeo` to check for new image versions for both `:latest` and version-pinned tags.
   - **Release Note Integration**: Displays a direct link to release notes when an update is available.
-  - **Interactive Updates**: A special mode (`--pull` or `--recreate`) to scan for all available updates and let you choose which new images to pull & recreate.
+  - **Interactive Updates**: A special mode (`--pull` or `--update`) to scan for all available updates and let you choose which new images to pull & recreate.
   - **Comprehensive Health Monitoring**: Checks container status, health checks (`healthy`/`unhealthy`), and restart counts.
   - **Resource & Log Scanning**: Monitors CPU, memory, disk usage, and network errors against configurable thresholds, and scans logs for error keywords.
   - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
@@ -139,7 +139,7 @@ You can override any setting from the YAML file by exporting an environment vari
   - **Run a check on specific containers:**
     `./container-monitor.sh portainer traefik`
   - **Update and recreate containers:**
-     `./container-monitor.sh --recreate`
+     `./container-monitor.sh --update`
   - **Run a check excluding containers:**
     `./container-monitor.sh --exclude=watchtower`
   - **Run in Summary-Only Mode (for automation):**
