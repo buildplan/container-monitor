@@ -27,7 +27,7 @@
 #   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
 #   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./container-monitor.sh --pull      				- Choose which containers to update (only pull new image, manually recreate)
-#   ./container-monitor.sh --recreate                           - Choose which containers to update and recreate (pull and recreate container)
+#   ./container-monitor.sh --update                             - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
 #   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
 #   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
@@ -45,8 +45,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.30"
-VERSION_DATE="2025-07-19"
+VERSION="v0.31"
+VERSION_DATE="2025-07-20"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -1038,7 +1038,7 @@ run_interactive_update_mode() {
 
         for container_to_update in "${containers_to_process[@]}"; do
             if [ "$RECREATE_MODE" = true ]; then
-                # If --recreate was used, call the new function
+                # If --update was used, call the new function
                 recreate_container "$container_to_update"
             else
                 # Otherwise, call the original pull function
@@ -1213,7 +1213,7 @@ main() {
                 local EXCLUDE_STR="${arg#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 ;;
-            --recreate)
+            --update)
                 RECREATE_MODE=true
                 INTERACTIVE_UPDATE_MODE=true
                 ;;
