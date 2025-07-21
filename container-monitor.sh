@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.32"
+VERSION="v0.33"
 VERSION_DATE="2025-07-21"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -946,38 +946,31 @@ pull_new_image() {
 
 recreate_container() {
     local container_name="$1"
+    local new_version="$2" # Accept the new version as an argument
     print_message "Starting full update for '$container_name'..." "INFO"
 
-    # 1. Get the compose project directory from the container's labels
-    local working_dir
-    working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
+    # Get the original image reference BEFORE updating
+    local old_image_ref; old_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)
 
-    if [ -z "$working_dir" ]; then
-        print_message "Cannot auto-recreate '$container_name'. It does not appear to be managed by docker-compose (missing required labels)." "DANGER"
+    # 1. Get compose project directory and service name from labels
+    local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
+    local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
+
+    if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
+        print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
         return 1
     fi
 
-    # 2. Get the compose SERVICE name from the container's labels
-    local service_name
-    service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
-
-    if [ -z "$service_name" ]; then
-        print_message "Could not determine docker-compose service name for '$container_name'. Using container name as a fallback." "WARNING"
-        service_name="$container_name"
-    fi
-
-    # 3. Run the commands from the correct directory inside a subshell
+    # 2. Run the update commands inside a subshell
     (
         cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
 
-        # Use the determined SERVICE NAME for the pull command
         print_message "Running 'docker compose pull $service_name' in '$working_dir'..." "INFO"
         if ! docker compose pull "$service_name"; then
-            print_message "Failed to pull new image for service '$service_name' in '$working_dir'." "DANGER"
+            print_message "Failed to pull new image for service '$service_name'." "DANGER"
             exit 1
         fi
 
-        # Use the determined SERVICE NAME for the up command
         print_message "Running 'docker compose up -d --force-recreate $service_name'..." "INFO"
         if ! docker compose up -d --force-recreate "$service_name"; then
             print_message "Failed to recreate service '$service_name'." "DANGER"
@@ -986,6 +979,14 @@ recreate_container() {
 
         print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
     )
+
+    # 3. If the update was successful and we have a new version number, print the final instruction
+    if [ $? -eq 0 ] && [ -n "$new_version" ]; then
+        local image_name_no_tag; image_name_no_tag="${old_image_ref%:*}"
+        local new_image_ref="${image_name_no_tag}:${new_version}"
+
+        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} To make this update permanent, please update the image tag in your docker-compose.yml from '${old_image_ref}' to '${new_image_ref}' for the '${service_name}' service." "WARNING"
+    fi
 }
 
 run_interactive_update_mode() {
@@ -1047,12 +1048,20 @@ run_interactive_update_mode() {
             done
         fi
 
-        for container_to_update in "${containers_to_process[@]}"; do
+        for i in "${!containers_to_process[@]}"; do
+            local container_to_update="${containers_to_process[i]}"
             if [ "$RECREATE_MODE" = true ]; then
-                # If --update was used, call the new function
-                recreate_container "$container_to_update"
+                # Find the original index to get the correct details
+                for j in "${!containers_with_updates[@]}"; do
+                    if [[ "${containers_with_updates[j]}" == "$container_to_update" ]]; then
+                        local update_details="${container_update_details[j]}"
+                        # Extract the new version from a message like "Update available: v1.2.3, ..."
+                        local new_version; new_version=$(echo "$update_details" | grep -oP '(?<=Update available: )[^,]+')
+                        recreate_container "$container_to_update" "$new_version"
+                        break
+                    fi
+                done
             else
-                # Otherwise, call the original pull function
                 pull_new_image "$container_to_update"
             fi
         done
