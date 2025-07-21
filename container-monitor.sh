@@ -948,44 +948,46 @@ recreate_container() {
     local container_name="$1"
     print_message "Starting full update for '$container_name'..." "INFO"
 
-    # 1. Get the compose project directory from the container's labels
-    local working_dir
-    working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
+    # 1. Get compose project details from the container's labels
+    local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
+    local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
+    # FIX: Get the specific compose file(s) used to create the container
+    local config_files; config_files=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$container_name" 2>/dev/null)
 
-    if [ -z "$working_dir" ]; then
-        print_message "Cannot auto-recreate '$container_name'. It does not appear to be managed by docker-compose (missing required labels)." "DANGER"
+    if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
+        print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
         return 1
     fi
 
-    # 2. Get the compose SERVICE name from the container's labels
-    local service_name
-    service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
-
-    if [ -z "$service_name" ]; then
-        print_message "Could not determine docker-compose service name for '$container_name'. Using container name as a fallback." "WARNING"
-        service_name="$container_name"
+    # 2. Build the base docker-compose command, including the -f flags for the specific files
+    local compose_cmd_base=("docker" "compose")
+    if [ -n "$config_files" ]; then
+        # Handle multiple comma-separated files
+        IFS=',' read -r -a files_array <<< "$config_files"
+        for file in "${files_array[@]}"; do
+            compose_cmd_base+=("-f" "$file")
+        done
     fi
 
-    # 3. Run the commands from the correct directory inside a subshell
+    # 3. Run the update commands inside a subshell for safety
     (
         cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
 
-        # Use the determined SERVICE NAME for the pull command
-        print_message "Running 'docker compose pull $service_name' in '$working_dir'..." "INFO"
-        if ! docker compose pull "$service_name"; then
-            print_message "Failed to pull new image for service '$service_name' in '$working_dir'." "DANGER"
+        print_message "Running 'docker compose pull $service_name'..." "INFO"
+        # Use the command we built, which includes the correct -f flags
+        if ! "${compose_cmd_base[@]}" pull "$service_name"; then
+            print_message "Failed to pull new image for service '$service_name'." "DANGER"
             exit 1
         fi
 
-        # Use the determined SERVICE NAME for the up command
         print_message "Running 'docker compose up -d --force-recreate $service_name'..." "INFO"
-        if ! docker compose up -d --force-recreate "$service_name"; then
+        if ! "${compose_cmd_base[@]}" up -d --force-recreate "$service_name"; then
             print_message "Failed to recreate service '$service_name'." "DANGER"
             exit 1
         fi
 
         print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
-	print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} Update the image tag in your docker-compose.yml for the '${service_name}' service." "WARNING"
+        print_message " ⚠ ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} To make this update permanent, update the image tag in your compose file for the '${service_name}' service." "WARNING"
     )
 }
 
