@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.32"
+VERSION="v0.33"
 VERSION_DATE="2025-07-21"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -985,7 +985,6 @@ recreate_container() {
         fi
 
         print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
-        print_message "  ⚠ ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} To make this update permanent, please update the image tag in your docker-compose.yml for the '${service_name}' service." "WARNING"
     )
 }
 
