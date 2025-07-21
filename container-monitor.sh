@@ -985,6 +985,7 @@ recreate_container() {
         fi
 
         print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
+	print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} Update the image tag in your docker-compose.yml for the '${service_name}' service." "WARNING"
     )
 }
 
