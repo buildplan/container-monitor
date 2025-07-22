@@ -88,29 +88,53 @@ The script is configured through the `config.yml` file or by setting environment
 
 This is the central place for all settings. It is structured into sections for clarity.
 
-**Example `config.yml`:**
-
 ```yaml
+# General script settings
 general:
+  log_lines_to_check: 40
   log_file: "docker-monitor.log"
+  update_check_cache_hours: 6
+  lock_timeout_seconds: 30
 
+# Custom patterns for the log checker
+logs:
+  error_patterns:
+    - "Exception"
+    - "SEVERE"
+    - "Traceback"
+
+# Credentials for private registries (safer as ENV vars)
+auth:
+  docker_username: ""
+  docker_password: ""
+
+# Thresholds for resource warnings
+thresholds:
+  cpu_warning: 80
+  memory_warning: 80
+  disk_space: 80
+  network_error: 10
+
+# Notifications settings
 notifications:
-  channel: "discord"
-  notify_on: "Updates,Logs,Status"
+  channel: "none" # Set to "discord", "ntfy", or "none"
+  notify_on: "Updates,Logs,Restarts,Status" # Comma-separated list of issues to alert on
   discord:
-    webhook_url: "https://discord.com/api/webhooks/your_hook_here"
+    webhook_url: ""
   ntfy:
     server_url: "https://ntfy.sh"
     topic: "your_topic"
-    priority: 4
-    icon_url: "https://cdn.jsdelivr.net/gh/selfhst/icons/png/docker.png"
+    access_token: ""
+    priority: 3
 
+# Container-specific settings
 containers:
   monitor_defaults:
     - "portainer"
     - "traefik"
   release_urls:
     portainer/portainer-ce: "https://github.com/portainer/portainer/releases"
+    amir20/dozzle: "https://github.com/amir20/dozzle/releases"
 ```
 
 #### Environment Variables
