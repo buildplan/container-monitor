@@ -36,7 +36,7 @@
 #   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
 #   ./container-monitor.sh --prune                              - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
-#   ./container-monitor.sh --help                  		- Shows script usage commands.
+#   ./container-monitor.sh --help [or -h]                 	- Shows script usage commands.
 #
 # Prerequisites:
 #   - Docker
@@ -47,7 +47,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.39"
+VERSION="v0.39.1"
 VERSION_DATE="2025-07-22"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -106,6 +106,8 @@ NTFY_SERVER_URL="$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
 NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
+
+# --- Functions ---
 
 load_configuration() {
     _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
@@ -216,30 +218,26 @@ load_configuration() {
 
 print_help() {
   cat <<EOF
-Usage:
-  ./container-monitor.sh                         - Monitor based on config (or all running)
-  ./container-monitor.sh <container1> <container2> ...
-                                                 - Monitor specific containers (full output)
-  ./container-monitor.sh --pull                  - Choose containers to update (pull new image, no recreate)
-  ./container-monitor.sh --update                - Choose containers to update and recreate
-  ./container-monitor.sh --exclude=c1,c2         - Run on all containers, excluding specific ones
-  ./container-monitor.sh summary                 - Run checks silently and show only summary
-  ./container-monitor.sh summary <c1> <c2> ...   - Summary mode for specific containers
-  ./container-monitor.sh logs                    - Show logs for all running containers
-  ./container-monitor.sh logs <container> [pattern...]
-                                                 - Show logs for a container, with optional filters
-  ./container-monitor.sh save logs <container>   - Save logs for a specific container to a file
-  ./container-monitor.sh --prune                 - Run Docker's system prune
-  ./container-monitor.sh --no-update             - Run without checking for a script update
-  ./container-monitor.sh --help                  - Show this help message
+${COLOR_GREEN}Usage:${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}                       ${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}
+                                                                            ${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}                ${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}              ${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}       ${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh summary${COLOR_RESET}               ${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh logs <container> [pattern...]${COLOR_RESET}
+                                                                            ${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh save logs <container>${COLOR_RESET} ${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}               ${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}           ${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}
+  ${COLOR_YELLOW}./container-monitor.sh --help${COLOR_RESET}                ${COLOR_CYAN}- Show this help message${COLOR_RESET}
 
-Notes:
-  - Environment variables (LOG_FILE, CONTAINER_NAMES, etc.) override config.sh
-  - Dependencies: docker, jq, yq, skopeo, bc
+${COLOR_GREEN}Notes:${COLOR_RESET}
+  ${COLOR_CYAN}- Environment variables (e.g., NOTIFICATION_CHANNEL) override config.yml${COLOR_RESET}
+  ${COLOR_CYAN}- Dependencies: docker, jq, yq, skopeo, gawk, coreutils, wget${COLOR_RESET}
 EOF
 }
-
-# --- Functions ---
 
 print_header_box() {
     # --- Configuration for the box ---
