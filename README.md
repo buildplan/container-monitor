@@ -19,7 +19,9 @@ A  Bash script to monitor Docker containers. It checks container health, resourc
   - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
   - **Flexible Notifications**: Sends alerts to **Discord** or a self-hosted **ntfy** server with the hostname included.
   - **Selective Notifications**: Configure which types of issues (e.g., `Updates`, `Logs`) should trigger a notification.
-  - **Polished Interface**: Displays an informative header box and a progress bar during manual runs.
+  - **Stateful Monitoring**: Remembers previous runs to provide intelligent alerts.
+       - **Update Caching**: Avoids excessive registry checks by caching update results.
+       - **Restart Tracking**: Only alerts on *new* container restarts, not old ones.
   - **Summary Report**: Provides a final summary with host-level stats and a list of containers with issues.
 
 -----
@@ -115,42 +117,47 @@ containers:
 
 You can override any setting from the YAML file by exporting an environment variable. The variable name is the uppercase version of the YAML path.
 
-| Environment Variable | YAML Path | Default |
-|---|---|---|
-| `LOG_LINES_TO_CHECK` | `.general.log_lines_to_check` | `20` |
-| `CPU_WARNING_THRESHOLD` | `.thresholds.cpu_warning` | `80` |
-|`UPDATE_CHECK_CACHE_HOURS`|`.general.update_check_cache_hours`|`6`|
-| `NOTIFICATION_CHANNEL` | `.notifications.channel` | `none`|
-| `NOTIFY_ON` | `.notifications.notify_on`| (all issues) |
-| `DISCORD_WEBHOOK_URL`| `.notifications.discord.webhook_url`| `...` |
-| `CONTAINER_NAMES` | n/a | (empty) | Comma-separated string of containers to monitor (overrides `monitor_defaults`). |
+| YAML Path | ENV Variable | Default | Description |
+|---|---|---|---|
+| `.general.log_lines_to_check`|`LOG_LINES_TO_CHECK`| `20` | Number of log lines to scan for errors. |
+| `.general.update_check_cache_hours`|`UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results. |
+| `.thresholds.cpu_warning` |`CPU_WARNING_THRESHOLD`| `80` | CPU usage % to trigger a warning. |
+| `.thresholds.memory_warning`|`MEMORY_WARNING_THRESHOLD`| `80` | Memory usage % to trigger a warning. |
+| `.notifications.channel` |`NOTIFICATION_CHANNEL`| `"none"` | Notification channel: `"discord"`, `"ntfy"`, or `"none"`. |
+| `.notifications.notify_on` |`NOTIFY_ON`| All issues | Comma-separated list of issue types to send alerts for. |
+| `.auth.docker_username` |`DOCKER_USERNAME`| (empty) | Username for private registries. |
+| `.auth.docker_password` |`DOCKER_PASSWORD`| (empty) | Password for private registries. |
 
-
-**Tip:** To find the names of your running containers, use the command `docker ps --format '{{.Names}}'`. You can then add the names you want to monitor to the `monitor_defaults` list in your `config.yml` file.
+**Tip**: To find the names of your running containers, use `docker ps --format '{{.Names}}'`. You can add these names to the `monitor_defaults` list in `config.yml`.
 
 -----
 
 ### Usage
 
+The script offers several modes of operation via command-line flags.
+
 #### Running Checks
 
-  - **Run a standard check:**
-    `./container-monitor.sh`
-  - **Run a check on specific containers:**
-    `./container-monitor.sh portainer traefik`
-  - **Update and recreate containers:**
-     `./container-monitor.sh --update`
-  - **Run a check excluding containers:**
-    `./container-monitor.sh --exclude=watchtower`
-  - **Run in Summary-Only Mode (for automation):**
-    `./container-monitor.sh summary`
+  - **Run a standard check**: `./container-monitor.sh`
+  - **Check specific containers**: `./container-monitor.sh portainer traefik`
+  - **Exclude containers**: `./container-monitor.sh --exclude=watchtower,pihole`
+  - **Run in Summary-Only Mode**: `./container-monitor.sh summary`
 
 #### Managing Updates
 
-  - **Interactively update containers:**
+  - **Interactive Pull Mode**: Scans for updates and lets you choose which new images to **pull**. You must recreate the containers manually.
     `./container-monitor.sh --pull`
-  - **Skip the self-update check:**
+  - **Interactive Update Mode**: Scans for updates and lets you choose which containers to **pull and recreate** using Docker Compose.
+    `./container-monitor.sh --update`
+  - **Skip Self-Update**: Runs the script without checking for a new version of itself.
     `./container-monitor.sh --no-update`
+
+#### Other Utilities
+
+  - **System Cleanup**: Interactively run `docker system prune -a` to remove all unused Docker resources.
+    `./container-monitor.sh --prune`
+  - **View Logs**: View recent logs for a container, with optional keyword filtering.
+    `./container-monitor.sh logs portainer error critical`
 
 -----
 
@@ -258,8 +265,8 @@ All script output, including detailed checks from non-summary runs, is logged to
 
 To support stateful restart alerts and update caching, the script creates a file named `.monitor_state.json` in the same directory.
 
-* **Purpose**: This file stores the last known restart count for each container and the cached results of image update checks.
-* **Management**: You should not need to edit this file manually. If you want to reset the script's memory of all restarts and clear the update cache, you can safely delete this file. It will be automatically recreated on the next run.
+  - **Purpose**: This file stores the last known restart count for each container and the cached results of image update checks.
+  - **Management**: You should not need to edit this file. If you want to reset the script's memory of all restarts and clear the update cache, you can safely delete this file; it will be recreated on the next run.
 
 ### Troubleshooting
 
