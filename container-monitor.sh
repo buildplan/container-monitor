@@ -45,7 +45,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.34"
+VERSION="v0.35"
 VERSION_DATE="2025-07-21"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -918,6 +918,24 @@ check_host_memory_usage() { # Echos output, does not call print_message directly
     echo "$output_string"
 }
 
+run_prune() {
+    echo
+    print_message "The prune command will run 'docker system prune -a'." "WARNING"
+    print_message "This will remove ALL unused containers, networks, images, and the build cache." "WARNING"
+    print_message "${COLOR_RED}This action is irreversible.${COLOR_RESET}" "NONE"
+    echo
+
+    local response
+    read -rp "Are you absolutely sure you want to continue? (y/n): " response
+    if [[ "$response" =~ ^[yY]$ ]]; then
+        print_message "Running 'docker system prune -a'..." "INFO"
+        docker system prune -a
+        print_message "Prune command completed." "GOOD"
+    else
+        print_message "Prune operation cancelled." "INFO"
+    fi
+}
+
 pull_new_image() {
     local container_name_to_update="$1"
     print_message "Getting image details for '$container_name_to_update'..." "INFO"
@@ -1060,6 +1078,13 @@ run_interactive_update_mode() {
             fi
         done
 
+    # prune choice
+    local prune_choice
+    read -rp "Update process finished. Would you like to clean up the system now? (y/n): " prune_choice
+    if [[ "$prune_choice" =~ ^[yY]$ ]]; then
+        run_prune
+    fi
+
     print_message "Interactive update process finished." "INFO"
 }
 
@@ -1184,6 +1209,13 @@ main() {
         if [[ "$arg" == "--no-update" ]]; then
             run_update_check=false
             break
+        fi
+    done
+    # 3a. --prune flag
+    for arg in "$@"; do
+        if [[ "$arg" == "--prune" ]]; then
+            run_prune
+            exit 0
         fi
     done
 
