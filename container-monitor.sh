@@ -36,6 +36,7 @@
 #   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
 #   ./container-monitor.sh --prune                              - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
+#   ./container-monitor.sh --help                  		- Shows script usage commands.
 #
 # Prerequisites:
 #   - Docker
@@ -46,7 +47,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.38"
+VERSION="v0.39"
 VERSION_DATE="2025-07-22"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -211,6 +212,31 @@ load_configuration() {
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
 
+}
+
+print_help() {
+  cat <<EOF
+Usage:
+  ./container-monitor.sh                         - Monitor based on config (or all running)
+  ./container-monitor.sh <container1> <container2> ...
+                                                 - Monitor specific containers (full output)
+  ./container-monitor.sh --pull                  - Choose containers to update (pull new image, no recreate)
+  ./container-monitor.sh --update                - Choose containers to update and recreate
+  ./container-monitor.sh --exclude=c1,c2         - Run on all containers, excluding specific ones
+  ./container-monitor.sh summary                 - Run checks silently and show only summary
+  ./container-monitor.sh summary <c1> <c2> ...   - Summary mode for specific containers
+  ./container-monitor.sh logs                    - Show logs for all running containers
+  ./container-monitor.sh logs <container> [pattern...]
+                                                 - Show logs for a container, with optional filters
+  ./container-monitor.sh save logs <container>   - Save logs for a specific container to a file
+  ./container-monitor.sh --prune                 - Run Docker's system prune
+  ./container-monitor.sh --no-update             - Run without checking for a script update
+  ./container-monitor.sh --help                  - Show this help message
+
+Notes:
+  - Environment variables (LOG_FILE, CONTAINER_NAMES, etc.) override config.sh
+  - Dependencies: docker, jq, yq, skopeo, bc
+EOF
 }
 
 # --- Functions ---
@@ -1228,6 +1254,12 @@ perform_checks_for_container() {
 
 # --- Main Execution ---
 main() {
+    # Help, show script commands
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        print_help
+        return 0
+    fi
+
     # 1. Check for and offer to install any missing dependencies
     check_and_install_dependencies
 
