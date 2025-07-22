@@ -46,7 +46,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.37"
+VERSION="v0.38"
 VERSION_DATE="2025-07-22"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -847,28 +847,56 @@ check_for_updates() {
 }
 
 check_logs() {
-    local container_name="$1"; local print_to_stdout="${2:-false}"; local filter_errors="${3:-false}"; local raw_logs
+    local container_name="$1"
+    local state_json="$2"
+
+    # First, get the logs and immediately check if the command was successful
+    local raw_logs
     raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
-    if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER"; return 1; fi
+    if [ $? -ne 0 ]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER" >&2
+        echo "" # Return an empty hash
+        return 1 # Return an error code to trigger a "Logs" issue
+    fi
 
     local error_regex
     if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
-        # Build regex from custom patterns in config.yml
         error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]}")
         error_regex="${error_regex%|}"
     else
-        # Fallback to default patterns
         error_regex='error|panic|fail|fatal'
     fi
 
-    if [ -n "$raw_logs" ]; then
-        if echo "$raw_logs" | grep -q -i -E "$error_regex"; then # Use the new regex
-            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Potential errors/warnings found in recent logs." "WARNING"; return 1
-        else
-            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no obvious widespread errors found." "GOOD"; return 0
-        fi
+    # Now, grep for errors within the logs we successfully retrieved
+    local current_errors
+    current_errors=$(echo "$raw_logs" | grep -i -E "$error_regex")
+
+    local new_hash=""
+    if [ -n "$current_errors" ]; then
+        # If errors are found, generate a hash of them
+        new_hash=$(echo "$current_errors" | sort | sha256sum | awk '{print $1}')
+    fi
+
+    # Get the previously saved error hash from the state file
+    local saved_hash
+    saved_hash=$(jq -r --arg name "$container_name" '.logs[$name] // ""' <<< "$state_json")
+
+    # Echo the new hash so the calling function can save it to the state
+    echo "$new_hash"
+
+    # Determine the exit code based on a change in the error state
+    if [[ -n "$new_hash" && "$new_hash" != "$saved_hash" ]]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New errors/warnings found in logs." "WARNING" >&2
+        return 1
+    elif [[ -z "$new_hash" && -n "$saved_hash" ]]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Previously logged errors have been resolved." "GOOD" >&2
+        return 0
+    elif [ -n "$new_hash" ]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No *new* errors found (persistent errors may exist)." "GOOD" >&2
+        return 0
     else
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No log output in last $LOG_LINES_TO_CHECK lines." "INFO"; return 0
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no obvious widespread errors found." "GOOD" >&2
+        return 0
     fi
 }
 
@@ -1186,7 +1214,12 @@ perform_checks_for_container() {
 	  '{key: $key, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
 
-    check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
+    local new_log_hash
+    new_log_hash=$(check_logs "$container_actual_name" "$state_json_string")
+    if [ $? -ne 0 ]; then
+        issue_tags+=("Logs")
+    fi
+    echo "$new_log_hash" > "$results_dir/$container_actual_name.log_hash"
 
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
@@ -1392,7 +1425,7 @@ main() {
         # Ensure state file exists and has basic structure
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
-            echo '{"updates": {}, "restarts": {}}' > "$STATE_FILE"
+            echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
         fi
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
 
@@ -1539,6 +1572,21 @@ main() {
                 local key; key=$(jq -r '.key' <<< "$cache_data")
                 local data; data=$(jq -r '.data' <<< "$cache_data")
                 new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
+            fi
+        done
+
+        # Update log error hashes
+        for log_hash_file in "$results_dir"/*.log_hash; do
+            if [ -f "$log_hash_file" ]; then
+                local container_name; container_name=$(basename "$log_hash_file" .log_hash)
+                local hash; hash=$(cat "$log_hash_file")
+                if [ -n "$hash" ]; then
+                    # If a new hash exists, add/update it in the state file
+                    new_state_json=$(jq --arg name "$container_name" --arg val "$hash" '.logs[$name] = $val' <<< "$new_state_json")
+                else
+                    # If the hash is empty, the error was resolved, so remove the key
+                    new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name])' <<< "$new_state_json")
+                fi
             fi
         done
 
