@@ -46,8 +46,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.35"
-VERSION_DATE="2025-07-21"
+VERSION="v0.36"
+VERSION_DATE="2025-07-22"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -970,7 +970,6 @@ recreate_container() {
     # 1. Get compose project details from the container's labels
     local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
     local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
-    # FIX: Get the specific compose file(s) used to create the container
     local config_files; config_files=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$container_name" 2>/dev/null)
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
@@ -981,7 +980,6 @@ recreate_container() {
     # 2. Build the base docker-compose command, including the -f flags for the specific files
     local compose_cmd_base=("docker" "compose")
     if [ -n "$config_files" ]; then
-        # Handle multiple comma-separated files
         IFS=',' read -r -a files_array <<< "$config_files"
         for file in "${files_array[@]}"; do
             compose_cmd_base+=("-f" "$file")
@@ -993,14 +991,13 @@ recreate_container() {
         cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
 
         print_message "Running 'docker compose pull $service_name'..." "INFO"
-        # Use the command we built, which includes the correct -f flags
-        if ! "${compose_cmd_base[@]}" pull "$service_name"; then
+        if ! "${compose_cmd_base[@]}" pull "$service_name" < /dev/null; then
             print_message "Failed to pull new image for service '$service_name'." "DANGER"
             exit 1
         fi
 
         print_message "Running 'docker compose up -d --force-recreate $service_name'..." "INFO"
-        if ! "${compose_cmd_base[@]}" up -d --force-recreate "$service_name"; then
+        if ! "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
             print_message "Failed to recreate service '$service_name'." "DANGER"
             exit 1
         fi
