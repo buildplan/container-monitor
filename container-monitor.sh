@@ -46,7 +46,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.36"
+VERSION="v0.37"
 VERSION_DATE="2025-07-22"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -1077,8 +1077,9 @@ run_interactive_update_mode() {
         done
 
     # prune choice
+    echo
     local prune_choice
-    read -rp "Update process finished. Would you like to clean up the system now? (y/n): " prune_choice
+    read -rp "${COLOR_YELLOW}Update process finished. Would you like to clean up the system now? (y/n): ${COLOR_RESET}" prune_choice
     if [[ "$prune_choice" =~ ^[yY]$ ]]; then
         run_prune
     fi
