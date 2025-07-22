@@ -34,6 +34,7 @@
 #   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
 #   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
 #   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
+#   ./container-monitor.sh --prune                              - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
 #
 # Prerequisites:
