@@ -874,7 +874,7 @@ check_logs() {
     local new_hash=""
     if [ -n "$current_errors" ]; then
         # If errors are found, generate a hash of them
-        new_hash=$(echo "$current_errors" | sha256sum | awk '{print $1}')
+        new_hash=$(echo "$current_errors" | sort | sha256sum | awk '{print $1}')
     fi
 
     # Get the previously saved error hash from the state file
