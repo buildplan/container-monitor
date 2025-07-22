@@ -88,6 +88,8 @@ The script is configured through the `config.yml` file or by setting environment
 
 This is the central place for all settings. It is structured into sections for clarity.
 
+**Example `config.yml`:**
+
 ```yaml
 # General script settings
 general:
