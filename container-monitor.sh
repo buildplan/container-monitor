@@ -854,7 +854,6 @@ check_logs() {
     local raw_logs
     raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
     if [ $? -ne 0 ]; then
-        # This is the restored check for a failure in the 'docker logs' command itself
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER" >&2
         echo "" # Return an empty hash
         return 1 # Return an error code to trigger a "Logs" issue
@@ -1215,7 +1214,12 @@ perform_checks_for_container() {
 	  '{key: $key, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
 
-    check_logs "$container_actual_name" "false" "false"; if [ $? -ne 0 ]; then issue_tags+=("Logs"); fi
+    local new_log_hash
+    new_log_hash=$(check_logs "$container_actual_name" "$state_json_string")
+    if [ $? -ne 0 ]; then
+        issue_tags+=("Logs")
+    fi
+    echo "$new_log_hash" > "$results_dir/$container_actual_name.log_hash"
 
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
