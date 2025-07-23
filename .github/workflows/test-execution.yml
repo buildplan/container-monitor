@@ -7,6 +7,9 @@ on:
       - dev
       - test
 
+permissions:
+  contents: read
+
 jobs:
   dry-run:
     name: Dry Run Tests
