@@ -65,3 +65,31 @@ containers:
     postgres: "https://www.postgresql.org/docs/release/"
     portainer/portainer-ce: "https://github.com/portainer/portainer/releases"
     lscr.io/linuxserver/radarr: "https://github.com/lscr.io/linuxserver.io/pkgs/container/radarr"
+
+# (Optional)
+# If a container isn't listed here, it uses the 'default' strategy.
+update_strategies:
+
+  # Strategy 1: "digest" (Most common for rolling tags)
+  # ------------------------------------------------------------------
+  # Use for: Any tag that is "rolling" or "floating". This includes 'latest',
+  # major versions like '17', and variants like '17-alpine' or 'stable'.
+  # How it works: Compares the local and remote image's unique ID (digest).
+  # This is the most reliable way to check for updates on non-specific tags.
+  postgres: "digest"
+  redis: "digest"
+  themythologist/monkeytype: "digest"
+
+  # Strategy 2: "semver"
+  # ------------------------------------------------------------------
+  # Use for: Images that have clean versioning (e.g., 1.2.3) but are mixed
+  # with messy build numbers or other non-version tags.
+  # How it works: Strictly filters for tags that look like X.Y.Z.
+  grafana/grafana: "semver"
+
+  # Strategy 3: "major-lock" (More niche use case)
+  # ------------------------------------------------------------------
+  # Use for: When you have pinned a container to a specific MINOR version
+  # (e.g., 'image:7.1') and only want to be notified of PATCH updates ('7.1.1', '7.1.2').
+  # How it works: If your tag is '7.1', it will look for newer '7.1.x' tags only.
+  # some-specific-app: "major-lock"
