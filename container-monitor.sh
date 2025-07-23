@@ -47,8 +47,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.39.2"
-VERSION_DATE="2025-07-22"
+VERSION="v0.40"
+VERSION_DATE="2025-07-23"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -784,79 +784,115 @@ check_for_updates() {
     # 2. Check for a valid cache entry first
     local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g') # Create a valid JSON key
     local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
-
     if [ -n "$cached_entry" ]; then
         local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
         local current_ts; current_ts=$(date +%s)
         local cache_age_sec=$((current_ts - cached_ts))
         local cache_max_age_sec=$((UPDATE_CHECK_CACHE_HOURS * 3600))
-
         if [ "$cache_age_sec" -lt "$cache_max_age_sec" ]; then
             local cached_msg; cached_msg=$(jq -r '.message' <<< "$cached_entry")
             local cached_code; cached_code=$(jq -r '.exit_code' <<< "$cached_entry")
             if [ "$cached_code" -ne 0 ]; then
-                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} ${cached_msg} (cached)" "WARNING" >&2
-                echo "$cached_msg"
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} ${cached_msg} (cached)" "WARNING" >&2; echo "$cached_msg"; return "$cached_code"
             else
-                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date (cached)." "GOOD" >&2
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date (cached)." "GOOD" >&2; return 0
             fi
-            return "$cached_code"
         fi
     fi
 
-    # 3. If no valid cache, perform a live check
+    # 3. Prepare for Live Check
     local current_tag="latest"
     local image_name_no_tag="$current_image_ref"
     if [[ "$current_image_ref" == *":"* ]]; then
         current_tag="${current_image_ref##*:}"
         image_name_no_tag="${current_image_ref%:$current_tag}"
     fi
-
-    local registry_host="registry-1.docker.io"
-    local image_path_for_skopeo="$image_name_no_tag"
+    local registry_host="registry-1.docker.io"; local image_path_for_skopeo="$image_name_no_tag"
     if [[ "$image_name_no_tag" == *"/"* ]]; then
         local first_part; first_part=$(echo "$image_name_no_tag" | cut -d'/' -f1)
         if [[ "$first_part" == *"."* || "$first_part" == "localhost" || "$first_part" == *":"* ]]; then
-            registry_host="$first_part"
-            image_path_for_skopeo=$(echo "$image_name_no_tag" | cut -d'/' -f2-)
+            registry_host="$first_part"; image_path_for_skopeo=$(echo "$image_name_no_tag" | cut -d'/' -f2-)
         fi
     else
         image_path_for_skopeo="library/$image_name_no_tag"
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
-
     local skopeo_opts=()
     if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
+    get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
 
-    get_release_url() {
-        yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"
+    # Helper to read the strategy from config.yml, falling back to "default"
+    get_update_strategy() {
+        yq e ".containers.update_strategies.\"${1}\" // .containers.update_strategies.\"${1%%:*}\" // \"default\"" "$SCRIPT_DIR/config.yml" 2>/dev/null
     }
+    local strategy; strategy=$(get_update_strategy "$image_name_no_tag")
 
+    # Always treat 'latest' tag as a digest check, regardless of strategy
     if [ "$current_tag" == "latest" ]; then
-        local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
-        if [ -z "$local_digest" ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check 'latest' tag." "WARNING" >&2; return 1; fi
-        local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:latest" 2>&1)
-        if [ $? -ne 0 ]; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:latest'." "DANGER" >&2; return 1; fi
-        local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
-        if [ "$remote_digest" != "$local_digest" ]; then
-            local summary_message="Update available for 'latest' tag"
-            local release_url; release_url=$(get_release_url "$image_name_no_tag")
-            if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} New 'latest' image available for '$current_image_ref'." "WARNING" >&2
-            echo "$summary_message"
-            return 1
-        else
-            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2; return 0
-        fi
+        strategy="digest"
     fi
 
-    local latest_stable_version; latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1) # Use opts
-    if [ -z "$latest_stable_version" ]; then
-        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not determine latest stable version for '$image_name_no_tag'. Skipping." "INFO" >&2; return 0
+    local latest_stable_version=""
+    local update_check_failed=false
+
+    case "$strategy" in
+        "digest")
+            local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
+            if [ -z "$local_digest" ]; then
+                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'." "WARNING" >&2; update_check_failed=true
+            else
+                local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:${current_tag}" 2>&1)
+                if [ $? -ne 0 ]; then
+                    print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'." "DANGER" >&2; update_check_failed=true
+                else
+                    local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
+                    if [ "$remote_digest" != "$local_digest" ]; then
+                        latest_stable_version="New image available for tag '${current_tag}'"
+                    fi
+                fi
+            fi
+            ;;
+
+        "semver")
+            # Strict X.Y.Z filter.
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+            ;;
+
+        "major-lock")
+            # Dynamic filter based on current tag.
+            local major_version="${current_tag%%.*}"
+            local variant=""
+            if [[ "$current_tag" == *"-"* ]]; then
+                variant="-${current_tag#*-}"
+            fi
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E "^${major_version}(\.[0-9]+)*${variant}$" | sort -V | tail -n 1)
+            ;;
+
+        *) # "default" logicg
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+            ;;
+    esac
+
+    # Final check and reporting
+    if [ "$update_check_failed" = true ]; then
+        return 1
+    elif [ -z "$latest_stable_version" ]; then
+        # This can happen if no tags match the filter, which is not an error.
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} No newer version found for '$image_name_no_tag' with strategy '$strategy'." "GOOD" >&2; return 0
     fi
-    if [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
+
+    # Compare versions
+    if [[ "$strategy" == "digest" ]]; then
+        # For digest, latest_stable_version is a message, not a version number
+        local summary_message="$latest_stable_version"
+        local release_url; release_url=$(get_release_url "$image_name_no_tag")
+        if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $summary_message" "WARNING" >&2
+        echo "$summary_message"
+        return 1
+    elif [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
         local summary_message="Update available: ${latest_stable_version}"
         local release_url; release_url=$(get_release_url "$image_name_no_tag")
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
