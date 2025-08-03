@@ -47,8 +47,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.40"
-VERSION_DATE="2025-07-23"
+VERSION="v0.41"
+VERSION_DATE="2025-08-03"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -137,6 +137,9 @@ load_configuration() {
             printf -v "$var_name" '%s' "$yaml_value"
         else
             printf -v "$var_name" '%s' "$default_value"
+        fi
+        if [[ ! "$LOG_FILE" = /* ]]; then
+            LOG_FILE="$SCRIPT_DIR/$LOG_FILE"
         fi
     }
 
