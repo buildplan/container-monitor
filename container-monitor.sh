@@ -24,16 +24,16 @@
 #   - HOST_DISK_CHECK_FILESYSTEM: Filesystem path on host to check for disk usage (e.g., "/", "/var/lib/docker"). Default: "/".
 #
 # Usage:
-#   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
-#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
+#   ./container-monitor.sh	                           	- Monitor based on config (or all running)
+#   ./container-monitor.sh <container1> <container2> ... 	- Monitor specific containers (full output)
 #   ./container-monitor.sh --pull      				- Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                             - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
-#   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
-#   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
-#   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
+#   ./container-monitor.sh summary	                   	- Run all checks silently and show only the final summary.
+#   ./container-monitor.sh summary <c1> <c2> ... 	    	- Summary mode for specific containers.
+#   ./container-monitor.sh logs                      		- Show logs for all running containers
 #   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
-#   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
+#   ./container-monitor.sh save logs <container_name> 		- Save logs for a specific container to a file
 #   ./container-monitor.sh --prune                              - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
 #   ./container-monitor.sh --help [or -h]                 	- Shows script usage commands.
@@ -1091,8 +1091,33 @@ recreate_container() {
             exit 1
         fi
 
-        print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
-        print_message " ⚠ ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} To make this update permanent, update the image tag in your compose file for the '${service_name}' service." "WARNING"
+	print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
+
+	# Get the container's image tag to check if it's 'latest'
+	local current_image_ref
+	current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)
+
+	# Only show the warning and edit prompt if the tag is NOT 'latest'
+	if [[ "$current_image_ref" != *:latest ]]; then
+	    print_message " ⚠ ${COLOR_YELLOW}To make this update permanent, the image tag in your compose file must be updated manually.${COLOR_RESET}" "WARNING"
+	    echo
+
+    	    # Get the primary compose file from the list
+            local main_compose_file="${config_files%%,*}"
+            local full_compose_path="$working_dir/$main_compose_file"
+
+    	    read -rp "Would you like to open '${full_compose_path}' now to edit the tag for the '${service_name}' service? (y/n): " response
+	    if [[ "$response" =~ ^[yY]$ ]]; then
+	        # Use VISUAL or EDITOR environment variables, fallback to nano, then vi
+	        ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
+	        print_message "Manual edit session finished." "INFO"
+	    else
+	        print_message "Manual edit skipped. Please remember to update your compose file later." "INFO"
+	    fi
+	else
+	    # If the tag is 'latest', no manual action is needed.
+	    print_message "Image uses the ':latest' tag, no manual file edit is required." "INFO"
+	fi
     )
 }
 
