@@ -1054,24 +1054,29 @@ pull_new_image() {
 
 recreate_container() {
     local container_name="$1"
-    print_message "Starting full update for '$container_name'..." "INFO"
+    local update_details="$2"
+    local is_rerun="${3:-false}" # NEW: Flag to prevent infinite loops
 
-    # 1. Get compose project details from the container's labels using jq for reliability
+    if [ "$is_rerun" = "false" ]; then
+        print_message "Starting full update for '$container_name'..." "INFO"
+    fi
+
+    # 1. Get compose project details
     local inspect_json; inspect_json=$(docker inspect "$container_name" 2>/dev/null)
     if [ -z "$inspect_json" ]; then
         print_message "Failed to inspect container '$container_name'." "DANGER"
-	return 1
+        return 1
     fi
     local working_dir; working_dir=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""')
     local service_name; service_name=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""')
     local config_files; config_files=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""')
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
-    	print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
-    	return 1
+        print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
+        return 1
     fi
 
-    # 2. Build the base docker-compose command, including the -f flags for the specific files
+    # 2. Build the docker compose command
     local compose_cmd_base=("docker" "compose")
     if [ -n "$config_files" ]; then
         IFS=',' read -r -a files_array <<< "$config_files"
@@ -1080,7 +1085,7 @@ recreate_container() {
         done
     fi
 
-    # 3. Run the update commands inside a subshell for safety
+    # 3. Run the update commands in a subshell
     (
         cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
 
@@ -1095,43 +1100,48 @@ recreate_container() {
             print_message "Failed to recreate service '$service_name'." "DANGER"
             exit 1
         fi
-
-	print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
-
-	# Get the container's image tag to check if it's 'latest'
-	local current_image_ref
-	current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)
-
-	# Only show the warning and edit prompt if the tag is NOT 'latest'
-	if [[ "$current_image_ref" != *:latest ]]; then
-    	    print_message " ⚠ ${COLOR_YELLOW}To make this update permanent, the image tag in your compose file must be updated manually.${COLOR_RESET}" "WARNING"
-    	    echo
-
-    	    # Get the primary compose file from the list
-    	    local main_compose_file="${config_files%%,*}"
-    	    local full_compose_path
-
-    	    # Check if the compose file path is absolute before prepending the working dir
-    	    if [[ "$main_compose_file" == /* ]]; then
-            	full_compose_path="$main_compose_file"
-    	    else
-        	full_compose_path="$working_dir/$main_compose_file"
-    	    fi
-
-    	    # Read directly from the terminal (/dev/tty) to prevent input issues
-    	    read -rp "Would you like to open '${full_compose_path}' now to edit the tag for the '${service_name}' service? (y/n): " response < /dev/tty
-       	    if [[ "$response" =~ ^[yY]$ ]]; then
-        	# Use VISUAL or EDITOR environment variables, fallback to nano, then vi
-        	${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
-        	print_message "Manual edit session finished." "INFO"
-    	    else
-        	print_message "Manual edit skipped. Please remember to update your compose file later." "INFO"
-    	    fi
-	else
-    	    # If the tag is 'latest', no manual action is needed.
-    	    print_message "Image uses the ':latest' tag, no manual file edit is required." "INFO"
-	fi
     )
+
+    print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
+
+    local current_image_ref; current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)
+
+    # Only show the edit prompt if the tag is versioned AND this is the first run
+    if [[ "$current_image_ref" != *:latest && "$is_rerun" == "false" ]]; then
+        print_message " ⚠ ${COLOR_YELLOW}To make this update permanent, the image tag in your compose file must be updated manually.${COLOR_RESET}" "WARNING"
+        echo
+
+        local main_compose_file="${config_files%%,*}"
+        local full_compose_path
+        if [[ "$main_compose_file" == /* ]]; then
+            full_compose_path="$main_compose_file"
+        else
+            full_compose_path="$working_dir/$main_compose_file"
+        fi
+
+        local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+        if [ -n "$new_version" ]; then
+            print_message "GUIDE: In the file, please change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
+        fi
+
+        read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " response < /dev/tty
+        if [[ "$response" =~ ^[yY]$ ]]; then
+            ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
+
+            # NEW: Prompt to re-run the update after editing
+            read -rp "File closed. Run the update again for '${container_name}' to apply changes? (y/n): " rerun_response < /dev/tty
+            if [[ "$rerun_response" =~ ^[yY]$ ]]; then
+                print_message "Re-running update for '${container_name}' to apply changes..." "INFO"
+                recreate_container "$container_name" "$update_details" "true" # Recursive call
+            else
+                print_message "Update not applied. Please run the update again for '${container_name}' manually." "WARNING"
+            fi
+        else
+            print_message "Manual edit skipped. Please remember to update your compose file later." "INFO"
+        fi
+    elif [[ "$current_image_ref" == *:latest ]]; then
+        print_message "Image uses the ':latest' tag, no manual file edit is required." "INFO"
+    fi
 }
 
 run_interactive_update_mode() {
@@ -1196,7 +1206,7 @@ run_interactive_update_mode() {
         for container_to_update in "${containers_to_process[@]}"; do
             if [ "$RECREATE_MODE" = true ]; then
                 # If --update was used, call the new function
-                recreate_container "$container_to_update"
+		recreate_container "$container_to_update" "${container_update_details[$((sel - 1))]}"
             else
                 # Otherwise, call the original pull function
                 pull_new_image "$container_to_update"
