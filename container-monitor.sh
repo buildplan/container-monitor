@@ -47,7 +47,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.42"
+VERSION="v0.43"
 VERSION_DATE="2025-08-17"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -860,7 +860,7 @@ check_for_updates() {
 
         "semver")
             # Strict X.Y.Z filter.
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
             ;;
 
         "major-lock")
@@ -874,7 +874,7 @@ check_for_updates() {
             ;;
 
         *) # "default" logicg
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
             ;;
     esac
 
@@ -1057,9 +1057,9 @@ recreate_container() {
     print_message "Starting full update for '$container_name'..." "INFO"
 
     # 1. Get compose project details from the container's labels
-    local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
-    local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
-    local config_files; config_files=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$container_name" 2>/dev/null)
+    local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" | default "" }}' "$container_name" 2>/dev/null)
+    local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" | default "" }}' "$container_name" 2>/dev/null)
+    local config_files; config_files=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" | default "" }}' "$container_name" 2>/dev/null)
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
         print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
