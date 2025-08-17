@@ -1129,7 +1129,8 @@ process_container_update() {
         ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
 
         local apply_response
-        read -rp "File closed. Recreate '${container_name}' now to apply the changes? (y/n): " apply_response < /dev/tty
+	echo # Adds a blank line for spacing
+	read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
         if [[ "$apply_response" =~ ^[yY]$ ]]; then
             print_message "Applying changes by recreating the container..." "INFO"
             (
