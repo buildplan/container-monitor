@@ -1056,14 +1056,19 @@ recreate_container() {
     local container_name="$1"
     print_message "Starting full update for '$container_name'..." "INFO"
 
-    # 1. Get compose project details from the container's labels
-    local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" | default "" }}' "$container_name" 2>/dev/null)
-    local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" | default "" }}' "$container_name" 2>/dev/null)
-    local config_files; config_files=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" | default "" }}' "$container_name" 2>/dev/null)
+    # 1. Get compose project details from the container's labels using jq for reliability
+    local inspect_json; inspect_json=$(docker inspect "$container_name" 2>/dev/null)
+    if [ -z "$inspect_json" ]; then
+        print_message "Failed to inspect container '$container_name'." "DANGER"
+	return 1
+    fi
+    local working_dir; working_dir=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""')
+    local service_name; service_name=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""')
+    local config_files; config_files=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""')
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
-        print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
-        return 1
+    	print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
+    	return 1
     fi
 
     # 2. Build the base docker-compose command, including the -f flags for the specific files
