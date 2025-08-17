@@ -1052,95 +1052,99 @@ pull_new_image() {
     fi
 }
 
-recreate_container() {
+process_container_update() {
     local container_name="$1"
     local update_details="$2"
-    local is_rerun="${3:-false}" # NEW: Flag to prevent infinite loops
 
-    if [ "$is_rerun" = "false" ]; then
-        print_message "Starting full update for '$container_name'..." "INFO"
-    fi
+    print_message "Starting guided update for '$container_name'..." "INFO"
 
-    # 1. Get compose project details
+    # 1. Get container and compose details
     local inspect_json; inspect_json=$(docker inspect "$container_name" 2>/dev/null)
-    if [ -z "$inspect_json" ]; then
-        print_message "Failed to inspect container '$container_name'." "DANGER"
-        return 1
-    fi
-    local working_dir; working_dir=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""')
-    local service_name; service_name=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""')
-    local config_files; config_files=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""')
+    if [ -z "$inspect_json" ]; then print_message "Failed to inspect container '$container_name'." "DANGER"; return 1; fi
+
+    local working_dir=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""')
+    local service_name=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""')
+    local config_files=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""')
+    local current_image_ref=$(echo "$inspect_json" | jq -r '.[0].Config.Image')
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
         print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
         return 1
     fi
 
-    # 2. Build the docker compose command
+    # 2. Build the base docker compose command
     local compose_cmd_base=("docker" "compose")
     if [ -n "$config_files" ]; then
         IFS=',' read -r -a files_array <<< "$config_files"
-        for file in "${files_array[@]}"; do
-            compose_cmd_base+=("-f" "$file")
-        done
+        for file in "${files_array[@]}"; do compose_cmd_base+=("-f" "$file"); done
     fi
 
-    # 3. Run the update commands in a subshell
-    (
-        cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
-
-        print_message "Running 'docker compose pull $service_name'..." "INFO"
-        if ! "${compose_cmd_base[@]}" pull "$service_name" < /dev/null; then
-            print_message "Failed to pull new image for service '$service_name'." "DANGER"
-            exit 1
-        fi
-
-        print_message "Running 'docker compose up -d --force-recreate $service_name'..." "INFO"
-        if ! "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
-            print_message "Failed to recreate service '$service_name'." "DANGER"
-            exit 1
-        fi
-    )
-
-    print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
-
-    local current_image_ref; current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name" 2>/dev/null)
-
-    # Only show the edit prompt if the tag is versioned AND this is the first run
-    if [[ "$current_image_ref" != *:latest && "$is_rerun" == "false" ]]; then
-        print_message " ⚠ ${COLOR_YELLOW}To make this update permanent, the image tag in your compose file must be updated manually.${COLOR_RESET}" "WARNING"
-        echo
-
-        local main_compose_file="${config_files%%,*}"
-        local full_compose_path
-        if [[ "$main_compose_file" == /* ]]; then
-            full_compose_path="$main_compose_file"
-        else
-            full_compose_path="$working_dir/$main_compose_file"
-        fi
-
-        local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-        if [ -n "$new_version" ]; then
-            print_message "GUIDE: In the file, please change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
-        fi
-
-        read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " response < /dev/tty
-        if [[ "$response" =~ ^[yY]$ ]]; then
-            ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
-
-            # NEW: Prompt to re-run the update after editing
-            read -rp "File closed. Run the update again for '${container_name}' to apply changes? (y/n): " rerun_response < /dev/tty
-            if [[ "$rerun_response" =~ ^[yY]$ ]]; then
-                print_message "Re-running update for '${container_name}' to apply changes..." "INFO"
-                recreate_container "$container_name" "$update_details" "true" # Recursive call
+    # --- LOGIC FOR LATEST TAG ---
+    if [[ "$current_image_ref" == *:latest ]]; then
+        print_message "Image uses ':latest' tag. Proceeding with standard pull and recreate." "INFO"
+        (
+            cd "$working_dir" || exit 1
+            if "${compose_cmd_base[@]}" pull "$service_name" < /dev/null && \
+               "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
+                print_message "Container '$container_name' successfully updated. ✅" "GOOD"
             else
-                print_message "Update not applied. Please run the update again for '${container_name}' manually." "WARNING"
+                print_message "An error occurred during the update of '$container_name'." "DANGER"
             fi
+        )
+        return
+    fi
+
+    # --- LOGIC FOR PINNED VERSION TAG ---
+    local image_name_no_tag="${current_image_ref%:*}"
+    local new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    if [ -z "$new_version" ]; then
+        print_message "Could not determine the new version for '$container_name'. Cannot proceed." "DANGER"
+        return 1
+    fi
+    local new_image_ref="${image_name_no_tag}:${new_version}"
+
+    print_message "Pulling new image '${new_image_ref}'..." "INFO"
+    if ! docker pull "$new_image_ref"; then
+        print_message "Failed to pull new image '${new_image_ref}'. Aborting update." "DANGER"
+        return 1
+    fi
+    print_message "Successfully pulled new image." "GOOD"
+
+    print_message " ⚠ ${COLOR_YELLOW}The new image has been pulled. Now, the compose file must be updated to use it.${COLOR_RESET}" "WARNING"
+    echo
+
+    local main_compose_file="${config_files%%,*}"
+    local full_compose_path
+    if [[ "$main_compose_file" == /* ]]; then
+        full_compose_path="$main_compose_file"
+    else
+        full_compose_path="$working_dir/$main_compose_file"
+    fi
+
+    print_message "GUIDE: In the file, please change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
+
+    local edit_response
+    read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
+    if [[ "$edit_response" =~ ^[yY]$ ]]; then
+        ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
+
+        local apply_response
+        read -rp "File closed. Recreate '${container_name}' now to apply the changes? (y/n): " apply_response < /dev/tty
+        if [[ "$apply_response" =~ ^[yY]$ ]]; then
+            print_message "Applying changes by recreating the container..." "INFO"
+            (
+                cd "$working_dir" || exit 1
+                if "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
+                     print_message "Container '$container_name' successfully updated with new version. ✅" "GOOD"
+                else
+                     print_message "An error occurred while recreating '$container_name'." "DANGER"
+                fi
+            )
         else
-            print_message "Manual edit skipped. Please remember to update your compose file later." "INFO"
+            print_message "Changes not applied. Please run 'docker compose up -d' in '${working_dir}' manually." "WARNING"
         fi
-    elif [[ "$current_image_ref" == *:latest ]]; then
-        print_message "Image uses the ':latest' tag, no manual file edit is required." "INFO"
+    else
+        print_message "Manual edit skipped. Please edit '${full_compose_path}' and run 'docker compose up -d' manually." "WARNING"
     fi
 }
 
@@ -1189,29 +1193,35 @@ run_interactive_update_mode() {
     fi
 
     # 6. Process the choice and pull images
-        local containers_to_process=()
-        if [ "$choice" == "all" ]; then
-            containers_to_process=("${containers_with_updates[@]}")
-        else
-            IFS=',' read -r -a selections <<< "$choice"
-            for sel in "${selections[@]}"; do
-                if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
-                    containers_to_process+=("${containers_with_updates[$((sel - 1))]}")
-                else
-                    print_message "Invalid selection: '$sel'. Skipping." "DANGER"
-                fi
-            done
-        fi
+	local selections_to_process=()
+	local details_to_process=()
 
-        for container_to_update in "${containers_to_process[@]}"; do
-            if [ "$RECREATE_MODE" = true ]; then
-                # If --update was used, call the new function
-		recreate_container "$container_to_update" "${container_update_details[$((sel - 1))]}"
-            else
-                # Otherwise, call the original pull function
-                pull_new_image "$container_to_update"
-            fi
-        done
+	if [ "$choice" == "all" ]; then
+    	    selections_to_process=("${containers_with_updates[@]}")
+    	    details_to_process=("${container_update_details[@]}")
+	else
+	    IFS=',' read -r -a selections <<< "$choice"
+	    for sel in "${selections[@]}"; do
+	        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+		    local index=$((sel - 1))
+		    selections_to_process+=("${containers_with_updates[$index]}")
+		    details_to_process+=("${container_update_details[$index]}")
+        	else
+	            print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+	        fi
+	    done
+	fi
+
+	for i in "${!selections_to_process[@]}"; do
+	    local container_to_update="${selections_to_process[$i]}"
+	    local details_for_this_container="${details_to_process[$i]}"
+
+	    if [ "$RECREATE_MODE" = true ]; then
+	        process_container_update "$container_to_update" "$details_for_this_container"
+	    else
+	        pull_new_image "$container_to_update"
+	    fi
+	done
 
     # prune choice
     echo
