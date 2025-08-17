@@ -24,16 +24,16 @@
 #   - HOST_DISK_CHECK_FILESYSTEM: Filesystem path on host to check for disk usage (e.g., "/", "/var/lib/docker"). Default: "/".
 #
 # Usage:
-#   ./docker-container-monitor.sh                           	- Monitor based on config (or all running)
-#   ./docker-container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
+#   ./container-monitor.sh	                           	- Monitor based on config (or all running)
+#   ./container-monitor.sh <container1> <container2> ... 	- Monitor specific containers (full output)
 #   ./container-monitor.sh --pull      				- Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                             - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
-#   ./docker-container-monitor.sh summary                   	- Run all checks silently and show only the final summary.
-#   ./docker-container-monitor.sh summary <c1> <c2> ...     	- Summary mode for specific containers.
-#   ./docker-container-monitor.sh logs                      	- Show logs for all running containers
+#   ./container-monitor.sh summary	                   	- Run all checks silently and show only the final summary.
+#   ./container-monitor.sh summary <c1> <c2> ... 	    	- Summary mode for specific containers.
+#   ./container-monitor.sh logs                      		- Show logs for all running containers
 #   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
-#   ./docker-container-monitor.sh save logs <container_name> 	- Save logs for a specific container to a file
+#   ./container-monitor.sh save logs <container_name> 		- Save logs for a specific container to a file
 #   ./container-monitor.sh --prune                              - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --no-update        			- Run without checking for a script update.
 #   ./container-monitor.sh --help [or -h]                 	- Shows script usage commands.
@@ -47,7 +47,7 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.42"
+VERSION="v0.43"
 VERSION_DATE="2025-08-17"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
@@ -860,7 +860,7 @@ check_for_updates() {
 
         "semver")
             # Strict X.Y.Z filter.
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
             ;;
 
         "major-lock")
@@ -874,7 +874,7 @@ check_for_updates() {
             ;;
 
         *) # "default" logicg
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -E 'alpha|beta|rc|dev|test' | sort -V | tail -n 1)
+            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
             ;;
     esac
 
@@ -1052,48 +1052,101 @@ pull_new_image() {
     fi
 }
 
-recreate_container() {
+process_container_update() {
     local container_name="$1"
-    print_message "Starting full update for '$container_name'..." "INFO"
+    local update_details="$2"
 
-    # 1. Get compose project details from the container's labels
-    local working_dir; working_dir=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_name" 2>/dev/null)
-    local service_name; service_name=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_name" 2>/dev/null)
-    local config_files; config_files=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$container_name" 2>/dev/null)
+    print_message "Starting guided update for '$container_name'..." "INFO"
+
+    # 1. Get container and compose details
+    local inspect_json; inspect_json=$(docker inspect "$container_name" 2>/dev/null)
+    if [ -z "$inspect_json" ]; then print_message "Failed to inspect container '$container_name'." "DANGER"; return 1; fi
+
+    local working_dir=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""')
+    local service_name=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""')
+    local config_files=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""')
+    local current_image_ref=$(echo "$inspect_json" | jq -r '.[0].Config.Image')
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
         print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
         return 1
     fi
 
-    # 2. Build the base docker-compose command, including the -f flags for the specific files
+    # 2. Build the base docker compose command
     local compose_cmd_base=("docker" "compose")
     if [ -n "$config_files" ]; then
         IFS=',' read -r -a files_array <<< "$config_files"
-        for file in "${files_array[@]}"; do
-            compose_cmd_base+=("-f" "$file")
-        done
+        for file in "${files_array[@]}"; do compose_cmd_base+=("-f" "$file"); done
     fi
 
-    # 3. Run the update commands inside a subshell for safety
-    (
-        cd "$working_dir" || { print_message "Failed to navigate to compose directory: '$working_dir'" "DANGER"; exit 1; }
+    # --- LOGIC FOR LATEST TAG ---
+    if [[ "$current_image_ref" == *:latest ]]; then
+        print_message "Image uses ':latest' tag. Proceeding with standard pull and recreate." "INFO"
+        (
+            cd "$working_dir" || exit 1
+            if "${compose_cmd_base[@]}" pull "$service_name" < /dev/null && \
+               "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
+                print_message "Container '$container_name' successfully updated. ✅" "GOOD"
+            else
+                print_message "An error occurred during the update of '$container_name'." "DANGER"
+            fi
+        )
+        return
+    fi
 
-        print_message "Running 'docker compose pull $service_name'..." "INFO"
-        if ! "${compose_cmd_base[@]}" pull "$service_name" < /dev/null; then
-            print_message "Failed to pull new image for service '$service_name'." "DANGER"
-            exit 1
+    # --- LOGIC FOR PINNED VERSION TAG ---
+    local image_name_no_tag="${current_image_ref%:*}"
+    local new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    if [ -z "$new_version" ]; then
+        print_message "Could not determine the new version for '$container_name'. Cannot proceed." "DANGER"
+        return 1
+    fi
+    local new_image_ref="${image_name_no_tag}:${new_version}"
+
+    print_message "Pulling new image '${new_image_ref}'..." "INFO"
+    if ! docker pull "$new_image_ref"; then
+        print_message "Failed to pull new image '${new_image_ref}'. Aborting update." "DANGER"
+        return 1
+    fi
+    print_message "Successfully pulled new image." "GOOD"
+
+    print_message " ⚠ ${COLOR_YELLOW}The new image has been pulled. Now, the compose file must be updated to use it.${COLOR_RESET}" "WARNING"
+    echo
+
+    local main_compose_file="${config_files%%,*}"
+    local full_compose_path
+    if [[ "$main_compose_file" == /* ]]; then
+        full_compose_path="$main_compose_file"
+    else
+        full_compose_path="$working_dir/$main_compose_file"
+    fi
+
+    print_message "GUIDE: In the file, please change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
+
+    local edit_response
+    read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
+    if [[ "$edit_response" =~ ^[yY]$ ]]; then
+        ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
+
+        local apply_response
+	echo # Adds a blank line for spacing
+	read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
+        if [[ "$apply_response" =~ ^[yY]$ ]]; then
+            print_message "Applying changes by recreating the container..." "INFO"
+            (
+                cd "$working_dir" || exit 1
+                if "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
+                     print_message "Container '$container_name' successfully updated with new version. ✅" "GOOD"
+                else
+                     print_message "An error occurred while recreating '$container_name'." "DANGER"
+                fi
+            )
+        else
+            print_message "Changes not applied. Please run 'docker compose up -d' in '${working_dir}' manually." "WARNING"
         fi
-
-        print_message "Running 'docker compose up -d --force-recreate $service_name'..." "INFO"
-        if ! "${compose_cmd_base[@]}" up -d --force-recreate "$service_name" < /dev/null; then
-            print_message "Failed to recreate service '$service_name'." "DANGER"
-            exit 1
-        fi
-
-        print_message "Container '$container_name' (service '$service_name') successfully updated. ✅" "GOOD"
-        print_message " ⚠ ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} To make this update permanent, update the image tag in your compose file for the '${service_name}' service." "WARNING"
-    )
+    else
+        print_message "Manual edit skipped. Please edit '${full_compose_path}' and run 'docker compose up -d' manually." "WARNING"
+    fi
 }
 
 run_interactive_update_mode() {
@@ -1141,29 +1194,35 @@ run_interactive_update_mode() {
     fi
 
     # 6. Process the choice and pull images
-        local containers_to_process=()
-        if [ "$choice" == "all" ]; then
-            containers_to_process=("${containers_with_updates[@]}")
-        else
-            IFS=',' read -r -a selections <<< "$choice"
-            for sel in "${selections[@]}"; do
-                if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
-                    containers_to_process+=("${containers_with_updates[$((sel - 1))]}")
-                else
-                    print_message "Invalid selection: '$sel'. Skipping." "DANGER"
-                fi
-            done
-        fi
+	local selections_to_process=()
+	local details_to_process=()
 
-        for container_to_update in "${containers_to_process[@]}"; do
-            if [ "$RECREATE_MODE" = true ]; then
-                # If --update was used, call the new function
-                recreate_container "$container_to_update"
-            else
-                # Otherwise, call the original pull function
-                pull_new_image "$container_to_update"
-            fi
-        done
+	if [ "$choice" == "all" ]; then
+    	    selections_to_process=("${containers_with_updates[@]}")
+    	    details_to_process=("${container_update_details[@]}")
+	else
+	    IFS=',' read -r -a selections <<< "$choice"
+	    for sel in "${selections[@]}"; do
+	        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+		    local index=$((sel - 1))
+		    selections_to_process+=("${containers_with_updates[$index]}")
+		    details_to_process+=("${container_update_details[$index]}")
+        	else
+	            print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+	        fi
+	    done
+	fi
+
+	for i in "${!selections_to_process[@]}"; do
+	    local container_to_update="${selections_to_process[$i]}"
+	    local details_for_this_container="${details_to_process[$i]}"
+
+	    if [ "$RECREATE_MODE" = true ]; then
+	        process_container_update "$container_to_update" "$details_for_this_container"
+	    else
+	        pull_new_image "$container_to_update"
+	    fi
+	done
 
     # prune choice
     echo
@@ -1195,22 +1254,34 @@ print_summary() { # Uses print_message with FORCE_STDOUT
     print_message "The following containers have warnings or errors:" "SUMMARY"
 
     for container_name_summary in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-      local already_printed=0
-      for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
-      if [[ "$already_printed" -eq 1 ]]; then continue; fi
-      printed_containers+=("$container_name_summary")
-      issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
-      local display_issues="${issues//|/, }"
-      issue_emoji="❌" 
-      if [[ "$issues" == *"Status"* ]]; then issue_emoji="🛑";
-      elif [[ "$issues" == *"Restarts"* ]]; then issue_emoji="🔥";
-      elif [[ "$issues" == *"Logs"* ]]; then issue_emoji="📜";
-      elif [[ "$issues" == *"Update"* ]]; then issue_emoji="🔄";
-      elif [[ "$issues" == *"Resources"* ]]; then issue_emoji="📈";
-      elif [[ "$issues" == *"Disk"* ]]; then issue_emoji="💾";
-      elif [[ "$issues" == *"Network"* ]]; then issue_emoji="🌐"; fi
-      print_message "- ${container_name_summary} ${issue_emoji} (${COLOR_BLUE}Issues:${COLOR_RESET} ${display_issues})" "WARNING"
+    	local already_printed=0
+	for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
+    	if [[ "$already_printed" -eq 1 ]]; then continue; fi
+    	printed_containers+=("$container_name_summary")
+
+    	local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
+    	local emoji_string=""
+
+    	# Build a string of all applicable emojis
+    	if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
+    	if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
+    	if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
+    	if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
+    	if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
+    	if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
+	if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
+    	if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
+
+    	# Print the container name with its emoji string
+    	print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
+
+    	# Split the detailed issues by the pipe delimiter and print each one
+    	IFS='|' read -r -a issue_array <<< "$issues"
+    	for issue_detail in "${issue_array[@]}"; do
+            print_message "  - ${issue_detail}" "WARNING"
+    	done
     done
+
   else
     print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
     print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"

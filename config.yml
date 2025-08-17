@@ -89,7 +89,8 @@ update_strategies:
 
   # Strategy 3: "major-lock" (More niche use case)
   # ------------------------------------------------------------------
-  # Use for: When you have pinned a container to a specific MINOR version
-  # (e.g., 'image:7.1') and only want to be notified of PATCH updates ('7.1.1', '7.1.2').
-  # How it works: If your tag is '7.1', it will look for newer '7.1.x' tags only.
+  # Use for: When you want to stay within a specific MAJOR version (e.g., '7.x.x')
+  # and be notified of new MINOR or PATCH updates.
+  # How it works: If your current tag is '7.1.5', it will look for any newer tags
+  # that start with '7.' (e.g., '7.2.0' or '7.1.6').
   # some-specific-app: "major-lock"
