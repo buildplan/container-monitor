@@ -6,7 +6,6 @@
 .nfs*
 
 ### macOS ###
-# General
 .DS_Store
 .AppleDouble
 .LSOverride
@@ -24,5 +23,4 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
-# iCloud generated files
 *.icloud
