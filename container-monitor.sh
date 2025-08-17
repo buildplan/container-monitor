@@ -1225,22 +1225,34 @@ print_summary() { # Uses print_message with FORCE_STDOUT
     print_message "The following containers have warnings or errors:" "SUMMARY"
 
     for container_name_summary in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-      local already_printed=0
-      for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
-      if [[ "$already_printed" -eq 1 ]]; then continue; fi
-      printed_containers+=("$container_name_summary")
-      issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
-      local display_issues="${issues//|/, }"
-      issue_emoji="❌" 
-      if [[ "$issues" == *"Status"* ]]; then issue_emoji="🛑";
-      elif [[ "$issues" == *"Restarts"* ]]; then issue_emoji="🔥";
-      elif [[ "$issues" == *"Logs"* ]]; then issue_emoji="📜";
-      elif [[ "$issues" == *"Update"* ]]; then issue_emoji="🔄";
-      elif [[ "$issues" == *"Resources"* ]]; then issue_emoji="📈";
-      elif [[ "$issues" == *"Disk"* ]]; then issue_emoji="💾";
-      elif [[ "$issues" == *"Network"* ]]; then issue_emoji="🌐"; fi
-      print_message "- ${container_name_summary} ${issue_emoji} (${COLOR_BLUE}Issues:${COLOR_RESET} ${display_issues})" "WARNING"
+    	local already_printed=0
+	for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
+    	if [[ "$already_printed" -eq 1 ]]; then continue; fi
+    	printed_containers+=("$container_name_summary")
+
+    	local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
+    	local emoji_string=""
+
+    	# Build a string of all applicable emojis
+    	if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
+    	if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
+    	if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
+    	if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
+    	if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
+    	if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
+    	if [[ "$issues" == *"Network"* ]]; then emoji_string+="🌐"; fi
+    	if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
+
+    	# Print the container name with its emoji string
+    	print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
+
+    	# Split the detailed issues by the pipe delimiter and print each one
+    	IFS='|' read -r -a issue_array <<< "$issues"
+    	for issue_detail in "${issue_array[@]}"; do
+            print_message "  - ${issue_detail}" "WARNING"
+    	done
     done
+
   else
     print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
     print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
