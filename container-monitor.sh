@@ -1104,24 +1104,32 @@ recreate_container() {
 
 	# Only show the warning and edit prompt if the tag is NOT 'latest'
 	if [[ "$current_image_ref" != *:latest ]]; then
-	    print_message " ⚠ ${COLOR_YELLOW}To make this update permanent, the image tag in your compose file must be updated manually.${COLOR_RESET}" "WARNING"
-	    echo
+    	    print_message " ⚠ ${COLOR_YELLOW}To make this update permanent, the image tag in your compose file must be updated manually.${COLOR_RESET}" "WARNING"
+    	    echo
 
     	    # Get the primary compose file from the list
-            local main_compose_file="${config_files%%,*}"
-            local full_compose_path="$working_dir/$main_compose_file"
+    	    local main_compose_file="${config_files%%,*}"
+    	    local full_compose_path
 
-    	    read -rp "Would you like to open '${full_compose_path}' now to edit the tag for the '${service_name}' service? (y/n): " response
-	    if [[ "$response" =~ ^[yY]$ ]]; then
-	        # Use VISUAL or EDITOR environment variables, fallback to nano, then vi
-	        ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
-	        print_message "Manual edit session finished." "INFO"
-	    else
-	        print_message "Manual edit skipped. Please remember to update your compose file later." "INFO"
-	    fi
+    	    # Check if the compose file path is absolute before prepending the working dir
+    	    if [[ "$main_compose_file" == /* ]]; then
+            	full_compose_path="$main_compose_file"
+    	    else
+        	full_compose_path="$working_dir/$main_compose_file"
+    	    fi
+
+    	    # Read directly from the terminal (/dev/tty) to prevent input issues
+    	    read -rp "Would you like to open '${full_compose_path}' now to edit the tag for the '${service_name}' service? (y/n): " response < /dev/tty
+       	    if [[ "$response" =~ ^[yY]$ ]]; then
+        	# Use VISUAL or EDITOR environment variables, fallback to nano, then vi
+        	${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
+        	print_message "Manual edit session finished." "INFO"
+    	    else
+        	print_message "Manual edit skipped. Please remember to update your compose file later." "INFO"
+    	    fi
 	else
-	    # If the tag is 'latest', no manual action is needed.
-	    print_message "Image uses the ':latest' tag, no manual file edit is required." "INFO"
+    	    # If the tag is 'latest', no manual action is needed.
+    	    print_message "Image uses the ':latest' tag, no manual file edit is required." "INFO"
 	fi
     )
 }
@@ -1240,7 +1248,7 @@ print_summary() { # Uses print_message with FORCE_STDOUT
     	if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
     	if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
     	if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
-    	if [[ "$issues" == *"Network"* ]]; then emoji_string+="🌐"; fi
+	if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
     	if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
 
     	# Print the container name with its emoji string
