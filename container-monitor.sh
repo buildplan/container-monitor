@@ -47,8 +47,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.41"
-VERSION_DATE="2025-08-03"
+VERSION="v0.42"
+VERSION_DATE="2025-08-17"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
 
@@ -1265,7 +1265,7 @@ perform_checks_for_container() {
     local update_details; update_details=$(echo "$update_output" | tail -n 1) # Message is always last line
 
     if [ "$update_exit_code" -ne 0 ]; then
-        issue_tags+=("$update_details")
+	issue_tags+=("Updates: $update_details")
     fi
 
     # If not, it was a live check and the result should be cached for next time.
