@@ -1265,7 +1265,7 @@ perform_checks_for_container() {
     local update_details; update_details=$(echo "$update_output" | tail -n 1) # Message is always last line
 
     if [ "$update_exit_code" -ne 0 ]; then
-        issue_tags+=("$update_details")
+	issue_tags+=("Updates: $update_details")
     fi
 
     # If not, it was a live check and the result should be cached for next time.
