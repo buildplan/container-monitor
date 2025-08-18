@@ -26,7 +26,7 @@
 #
 # Usage:
 #   ./container-monitor.sh                               - Monitor based on config (or all running)
-#   ./container-monitor.sh <container1> <c2> ...         - Monitor specific containers (full output)
+#   ./container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./container-monitor.sh --pull                        - Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                      - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --exclude=c1,c2               - Run on all containers, excluding specific ones.
