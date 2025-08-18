@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# --- v0.44 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -24,19 +25,19 @@
 #   - HOST_DISK_CHECK_FILESYSTEM: Filesystem path on host to check for disk usage (e.g., "/", "/var/lib/docker"). Default: "/".
 #
 # Usage:
-#   ./container-monitor.sh	                           	- Monitor based on config (or all running)
-#   ./container-monitor.sh <container1> <container2> ... 	- Monitor specific containers (full output)
-#   ./container-monitor.sh --pull      				- Choose which containers to update (only pull new image, manually recreate)
-#   ./container-monitor.sh --update                             - Choose which containers to update and recreate (pull and recreate container)
-#   ./container-monitor.sh --exclude=c1,c2           		- Run on all containers, excluding specific ones.
-#   ./container-monitor.sh summary	                   	- Run all checks silently and show only the final summary.
-#   ./container-monitor.sh summary <c1> <c2> ... 	    	- Summary mode for specific containers.
-#   ./container-monitor.sh logs                      		- Show logs for all running containers
-#   ./container-monitor.sh logs <container> [pattern...] 	- Show logs for a container, with optional filtering (e.g., logs my-app error warn).
-#   ./container-monitor.sh save logs <container_name> 		- Save logs for a specific container to a file
-#   ./container-monitor.sh --prune                              - Run Docker's system prune to clean up unused resources.
-#   ./container-monitor.sh --no-update        			- Run without checking for a script update.
-#   ./container-monitor.sh --help [or -h]                 	- Shows script usage commands.
+#   ./container-monitor.sh	                           - Monitor based on config (or all running)
+#   ./container-monitor.sh <container1> <container2> ...   - Monitor specific containers (full output)
+#   ./container-monitor.sh --pull      			   - Choose which containers to update (only pull new image, manually recreate)
+#   ./container-monitor.sh --update                        - Choose which containers to update and recreate (pull and recreate container)
+#   ./container-monitor.sh --exclude=c1,c2           	   - Run on all containers, excluding specific ones.
+#   ./container-monitor.sh summary	                   - Run all checks silently and show only the final summary.
+#   ./container-monitor.sh summary <c1> <c2> ...	   - Summary mode for specific containers.
+#   ./container-monitor.sh logs                      	   - Show logs for all running containers
+#   ./container-monitor.sh logs <container> [pattern...]   - Show logs for a container, with optional filtering (e.g., logs my-app error warn).
+#   ./container-monitor.sh save logs <container_name> 	   - Save logs for a specific container to a file
+#   ./container-monitor.sh --prune                         - Run Docker's system prune to clean up unused resources.
+#   ./container-monitor.sh --no-update        	 	   - Run without checking for a script update.
+#   ./container-monitor.sh --help [or -h]                  - Shows script usage commands.
 #
 # Prerequisites:
 #   - Docker
@@ -47,10 +48,10 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.43"
-VERSION_DATE="2025-08-17"
+VERSION="v0.44"
+VERSION_DATE="2025-08-18"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
-CHECKSUM_URL="${SCRIPT_URL}.sha256" # hash check
+CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
 # --- ANSI Color Codes ---
 COLOR_RESET=$'\033[0m'
@@ -1121,16 +1122,17 @@ process_container_update() {
         full_compose_path="$working_dir/$main_compose_file"
     fi
 
-    print_message "GUIDE: In the file, please change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
-
+    print_message "GUIDE: In the file, change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
+    echo
     local edit_response
     read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
     if [[ "$edit_response" =~ ^[yY]$ ]]; then
         ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
 
         local apply_response
-	echo # Adds a blank line for spacing
+	echo
 	read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
+	echo
         if [[ "$apply_response" =~ ^[yY]$ ]]; then
             print_message "Applying changes by recreating the container..." "INFO"
             (
