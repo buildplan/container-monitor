@@ -25,19 +25,19 @@
 #   - HOST_DISK_CHECK_FILESYSTEM: Filesystem path on host to check for disk usage (e.g., "/", "/var/lib/docker"). Default: "/".
 #
 # Usage:
-#   ./container-monitor.sh	          	- Monitor based on config (or all running)
-#   ./container-monitor.sh <container1> <c2> ..	- Monitor specific containers (full output)
-#   ./container-monitor.sh --pull      		- Choose which containers to update (only pull new image, manually recreate)
-#   ./container-monitor.sh --update         	- Choose which containers to update and recreate (pull and recreate container)
-#   ./container-monitor.sh --exclude=c1,c2   	- Run on all containers, excluding specific ones.
-#   ./container-monitor.sh summary	    	- Run all checks silently and show only the final summary.
-#   ./container-monitor.sh summary <c1> <c2> ..	- Summary mode for specific containers.
-#   ./container-monitor.sh logs                	- Show logs for all running containers
-#   ./container-monitor.sh logs <c> [pattern..] - Show logs for a container, with optional filtering (e.g., logs my-app error warn).
-#   ./container-monitor.sh save logs <container>- Save logs for a specific container to a file
-#   ./container-monitor.sh --prune            	- Run Docker's system prune to clean up unused resources.
-#   ./container-monitor.sh --no-update    	- Run without checking for a script update.
-#   ./container-monitor.sh --help [or -h]   	- Shows script usage commands.
+#   ./container-monitor.sh	          		- Monitor based on config (or all running)
+#   ./container-monitor.sh <container1> <c2> ..		- Monitor specific containers (full output)
+#   ./container-monitor.sh --pull      			- Choose which containers to update (only pull new image, manually recreate)
+#   ./container-monitor.sh --update         		- Choose which containers to update and recreate (pull and recreate container)
+#   ./container-monitor.sh --exclude=c1,c2   		- Run on all containers, excluding specific ones.
+#   ./container-monitor.sh summary	    		- Run all checks silently and show only the final summary.
+#   ./container-monitor.sh summary <c1> <c2> ..		- Summary mode for specific containers.
+#   ./container-monitor.sh logs                		- Show logs for all running containers
+#   ./container-monitor.sh logs <container> [pattern..] - Show logs for a container, with optional filtering (e.g., logs my-app error warn).
+#   ./container-monitor.sh save logs <container>	- Save logs for a specific container to a file
+#   ./container-monitor.sh --prune            		- Run Docker's system prune to clean up unused resources.
+#   ./container-monitor.sh --no-update    		- Run without checking for a script update.
+#   ./container-monitor.sh --help [or -h]   		- Shows script usage commands.
 #
 # Prerequisites:
 #   - Docker
