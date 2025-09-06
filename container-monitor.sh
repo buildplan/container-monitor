@@ -810,7 +810,7 @@ check_logs() {
     rm -f "$tmp_err"
     if [ -n "$cli_stderr" ]; then
         if [ $docker_exit_code -ne 0 ]; then
-            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${PIPESTATUS[0]}. See logs for details." "DANGER" >&2
+            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${docker_exit_code}. See logs for details." "DANGER" >&2
         else
         :
         fi
