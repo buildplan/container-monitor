@@ -2,7 +2,7 @@
 
 general:
   log_lines_to_check: 40
-  log_file: "docker-monitor.log"
+  log_file: "container-monitor.log"
   update_check_cache_hours: 6 # check for new updates after 6 hours
   lock_timeout_seconds: 30 # configurable lock timeout
 
@@ -14,6 +14,9 @@ logs:
     - "Exception"
     - "SEVERE"
     - "Traceback"
+  # Optional regex to strip variable data from logs before hashing.
+  # This default handles Docker's --timestamps format. You can adapt it for other log drivers.
+  log_clean_pattern: '^[^ ]+[[:space:]]+'
 
 # Credentials for private registries.
 # It is safer to provide these using environment variables:
@@ -22,6 +25,9 @@ logs:
 auth:
   docker_username: ""
   docker_password: ""
+  # Path to your Docker config.json for authentication.
+  # Defaults to ~/.docker/config.json if not set.
+  docker_config_path: "~/.docker/config.json"
 
 thresholds:
   cpu_warning: 80

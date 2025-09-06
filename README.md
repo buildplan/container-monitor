@@ -44,7 +44,7 @@ When you first run the script, it will check for these dependencies. If any are 
 
 ### Installation
 
-#### 1\. Get the Project Files
+#### 1. Get the Project Files
 
 Download the main script and the YAML configuration file.
 
@@ -56,7 +56,7 @@ wget https://github.com/buildplan/container-monitor/raw/main/container-monitor.s
 wget https://github.com/buildplan/container-monitor/raw/main/config.yml
 ```
 
-#### 2\. Verify Script Integrity (Recommended)
+#### 2. Verify Script Integrity (Recommended)
 
 To ensure the script is authentic, verify its SHA256 checksum.
 
@@ -68,13 +68,13 @@ wget https://github.com/buildplan/container-monitor/raw/main/container-monitor.s
 sha256sum -c container-monitor.sh.sha256
 ```
 
-#### 3\. Make it Executable
+#### 3. Make it Executable
 
 ```bash
 chmod +x container-monitor.sh
 ```
 
-#### 4\. Configure the Script
+#### 4. Configure the Script
 
 Open `config.yml` with a text editor to set your monitoring defaults, notification channels, and release note URLs.
 
@@ -94,7 +94,7 @@ This is the central place for all settings. It is structured into sections for c
 # General script settings
 general:
   log_lines_to_check: 40
-  log_file: "docker-monitor.log"
+  log_file: "container-monitor.log"
   update_check_cache_hours: 6
   lock_timeout_seconds: 30
 
@@ -143,16 +143,40 @@ containers:
 
 You can override any setting from the YAML file by exporting an environment variable. The variable name is the uppercase version of the YAML path.
 
+#### General & Logging
 | YAML Path | ENV Variable | Default | Description |
-|---|---|---|---|
-| `.general.log_lines_to_check`|`LOG_LINES_TO_CHECK`| `20` | Number of log lines to scan for errors. |
-| `.general.update_check_cache_hours`|`UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results. |
-| `.thresholds.cpu_warning` |`CPU_WARNING_THRESHOLD`| `80` | CPU usage % to trigger a warning. |
-| `.thresholds.memory_warning`|`MEMORY_WARNING_THRESHOLD`| `80` | Memory usage % to trigger a warning. |
-| `.notifications.channel` |`NOTIFICATION_CHANNEL`| `"none"` | Notification channel: `"discord"`, `"ntfy"`, or `"none"`. |
-| `.notifications.notify_on` |`NOTIFY_ON`| All issues | Comma-separated list of issue types to send alerts for. |
-| `.auth.docker_username` |`DOCKER_USERNAME`| (empty) | Username for private registries. |
-| `.auth.docker_password` |`DOCKER_PASSWORD`| (empty) | Password for private registries. |
+| :--- | :---: | :---: | :--- |
+| `general.log_lines_to_check`| `LOG_LINES_TO_CHECK`| `20` | Number of recent log lines to scan for errors. |
+| `general.log_file`| `LOG_FILE`| `container-monitor.log` | Path to the script's output log file. |
+| `general.update_check_cache_hours`| `UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results. |
+| `general.lock_timeout_seconds`| `LOCK_TIMEOUT_SECONDS`| `10` | Seconds to wait for a lock file before exiting. |
+| `logs.log_clean_pattern`| `LOG_CLEAN_PATTERN`| `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
+
+#### Thresholds & Monitoring
+| YAML Path | ENV Variable | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `thresholds.cpu_warning` | `CPU_WARNING_THRESHOLD`| `80` | CPU usage % that triggers a warning. |
+| `thresholds.memory_warning`| `MEMORY_WARNING_THRESHOLD`| `80` | Memory usage % that triggers a warning. |
+| `thresholds.disk_space`| `DISK_SPACE_THRESHOLD`| `80` | Disk usage % for a container mount that triggers a warning. |
+| `thresholds.network_error`| `NETWORK_ERROR_THRESHOLD`| `10` | Network error/drop count that triggers a warning. |
+| `host_system.disk_check_filesystem`| `HOST_DISK_CHECK_FILESYSTEM`| `/` | The host filesystem to monitor for disk space. |
+| N/A | `CONTAINER_NAMES`| `(empty)` | Comma-separated list of containers to monitor. |
+
+#### Notifications
+| YAML Path | ENV Variable | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `notifications.channel` | `NOTIFICATION_CHANNEL`| `none` | Notification channel: `discord`, `ntfy`, or `none`. |
+| `notifications.notify_on` | `NOTIFY_ON`| All issues | Comma-separated list of issue types to send alerts for. |
+| `notifications.discord.webhook_url`| `DISCORD_WEBHOOK_URL`| `(empty)` | The webhook URL for Discord notifications. |
+| `notifications.ntfy.server_url`| `NTFY_SERVER_URL`| `https://ntfy.sh` | The server URL for ntfy notifications. |
+| `notifications.ntfy.topic`| `NTFY_TOPIC`| `(empty)` | The topic to publish ntfy notifications to. |
+
+#### Authentication
+| YAML Path | ENV Variable | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `auth.docker_username` | `DOCKER_USERNAME`| `(empty)` | Username for a private Docker registry. |
+| `auth.docker_password` | `DOCKER_PASSWORD`| `(empty)` | Password for a private Docker registry. |
+| `auth.docker_config_path` | `DOCKER_CONFIG_PATH`| `~/.docker/config.json` | Path to Docker's `config.json` file for authentication. |
 
 **Tip**: To find the names of your running containers, use `docker ps --format '{{.Names}}'`. You can add these names to the `monitor_defaults` list in `config.yml`.
 
@@ -193,9 +217,9 @@ For automated execution, using `summary` and `--no-update` is recommended.
 
 #### Option A: systemd Timer Setup (Recommended)
 
-Create `/etc/systemd/system/docker-monitor.service` and `docker-monitor.timer`.
+Create `/etc/systemd/system/container-monitor.service` and `container-monitor.timer`.
 
-  - **`docker-monitor.service`**:
+  - **`container-monitor.service`**:
     ```ini
     [Unit]
     Description=Run Docker Container Monitor Script
@@ -204,7 +228,7 @@ Create `/etc/systemd/system/docker-monitor.service` and `docker-monitor.timer`.
     Type=oneshot
     ExecStart=/path/to/your/container-monitor.sh --no-update summary
     ```
-  - **`docker-monitor.timer`**:
+  - **`container-monitor.timer`**:
     ```ini
     [Unit]
     Description=Run Docker Container Monitor every 6 hours
@@ -217,7 +241,7 @@ Create `/etc/systemd/system/docker-monitor.service` and `docker-monitor.timer`.
     WantedBy=timers.target
     ```
 
-Then enable the timer: `sudo systemctl enable --now docker-monitor.timer`
+Then enable the timer: `sudo systemctl enable --now container-monitor.timer`
 
 #### Option B: Cron Job Setup
 
@@ -285,7 +309,7 @@ Enter the number(s) of the containers to update (e.g., '1' or '1,3'), or 'all', 
 
 ### Logging
 
-All script output, including detailed checks from non-summary runs, is logged to the file specified in `config.yml` (default: `docker-monitor.log`). For long-term use, consider using `logrotate` to manage the log file size.
+All script output, including detailed checks from non-summary runs, is logged to the file specified in `config.yml` (default: `container-monitor.log`). For long-term use, consider using `logrotate` to manage the log file size.
 
 ### State and Caching
 
