@@ -109,7 +109,6 @@ NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 # --- Functions ---
-
 load_configuration() {
     _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
 
@@ -117,7 +116,6 @@ load_configuration() {
         print_message "Invalid syntax in config.yml. Please check the file for errors." "DANGER"
         exit 1
     fi
-
     get_config_val() {
         if [ -f "$_CONFIG_FILE_PATH" ]; then
             yq e "$1 // \"\"" "$_CONFIG_FILE_PATH"
@@ -125,8 +123,6 @@ load_configuration() {
             echo ""
         fi
     }
-
-    # Helper function to set a final variable value based on priority
     set_final_config() {
         local var_name="$1"; local yaml_path="$2"; local default_value="$3"
         local env_value; env_value=$(printenv "$var_name")
@@ -144,11 +140,7 @@ load_configuration() {
         fi
     }
 
-    # Define script defaults here for clarity
-
     _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[^ ]+[[:space:]]+'
-
-    # Set all configuration variables
     set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
     set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
     set_final_config "LOG_CLEAN_PATTERN"             ".logs.log_clean_pattern"               "$_SCRIPT_DEFAULT_LOG_CLEAN_PATTERN"
@@ -173,14 +165,10 @@ load_configuration() {
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
         LOG_ERROR_PATTERNS=()
     fi
-
-    # Validate NOTIFICATION_CHANNEL
     if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
         print_message "Invalid notification_channel '$NOTIFICATION_CHANNEL' in config.yml. Valid values are: discord, ntfy, none. Disabling notifications." "WARNING"
         NOTIFICATION_CHANNEL="none"
     fi
-
-    # Validate NOTIFY_ON values
     if [ -n "$NOTIFY_ON" ]; then
         valid_issues=("Updates" "Logs" "Status" "Restarts" "Resources" "Disk" "Network")
         IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
@@ -199,8 +187,6 @@ load_configuration() {
     elif [ "$NOTIFICATION_CHANNEL" != "none" ]; then
         print_message "notify_on is empty in config.yml. No notifications will be sent." "WARNING"
     fi
-
-    # Normalize NOTIFY_ON to use standard case (optional, ensures consistency)
     if [ -n "$NOTIFY_ON" ]; then
         local normalized_notify_on=""
         IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
@@ -213,22 +199,18 @@ load_configuration() {
                 resources) normalized_notify_on+="Resources," ;;
                 disk) normalized_notify_on+="Disk," ;;
                 network) normalized_notify_on+="Network," ;;
-                *) normalized_notify_on+="$issue," ;; # Preserve invalid values for warning
+                *) normalized_notify_on+="$issue," ;;
             esac
         done
-        NOTIFY_ON="${normalized_notify_on%,}" # Remove trailing comma
+        NOTIFY_ON="${normalized_notify_on%,}"
     fi
-
-    # Load the list of default containers from the config file if no ENV var is set for it
     if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
 
 }
-
 print_help() {
     local format="  %-64s %s\n"
-
     printf "${COLOR_GREEN}Usage:${COLOR_RESET}\n"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}" "${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
@@ -241,56 +223,40 @@ print_help() {
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}" "${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh --help [or -h]${COLOR_RESET}" "${COLOR_CYAN}- Show this help message${COLOR_RESET}"
-
     printf "\n${COLOR_GREEN}Notes:${COLOR_RESET}\n"
     printf "  ${COLOR_CYAN}- Environment variables (e.g., NOTIFICATION_CHANNEL) override config.yml${COLOR_RESET}\n"
     printf "  ${COLOR_CYAN}- Dependencies: docker, jq, yq, skopeo, gawk, coreutils, wget${COLOR_RESET}\n"
 }
-
 print_header_box() {
-    # --- Configuration for the box ---
     local box_width=55
     local border_color="$COLOR_CYAN"
     local version_color="$COLOR_GREEN"
     local date_color="$COLOR_RESET"
     local update_color="$COLOR_YELLOW"
-
-    # --- Prepare content lines ---
     local line1="Container Monitor ${VERSION}"
     local line2="Updated: ${VERSION_DATE}"
     local line3=""
     if [ "$UPDATE_SKIPPED" = true ]; then
         line3="A new version is available to update"
     fi
-
-    # --- Helper function to print a centered line within the box ---
     print_centered_line() {
         local text="$1"
         local text_color="$2"
         local text_len=${#text}
-
-        # Calculate padding needed on each side to center the text
         local padding_total=$((box_width - text_len))
         local padding_left=$((padding_total / 2))
         local padding_right=$((padding_total - padding_left))
-
-        # Print the fully constructed line
         printf "${border_color}║%*s%s%s%*s${border_color}║${COLOR_RESET}\n" \
             "$padding_left" "" \
             "${text_color}" "${text}" \
             "$padding_right" ""
     }
-
-    # --- Draw the box ---
     local border_char="═"
     local top_border=""
     for ((i=0; i<box_width; i++)); do top_border+="$border_char"; done
-
     echo -e "${border_color}╔${top_border}╗${COLOR_RESET}"
     print_centered_line "$line1" "$version_color"
     print_centered_line "$line2" "$date_color"
-
-    # If the optional update line exists, print it
     if [ -n "$line3" ]; then
         local separator_char="─"
         local separator=""
@@ -302,15 +268,12 @@ print_header_box() {
     echo -e "${border_color}╚${top_border}╝${COLOR_RESET}"
     echo
 }
-
 check_and_install_dependencies() {
     local missing_pkgs=()
     local manual_install_needed=false
     local yq_missing=false
     local pkg_manager=""
     local arch=""
-
-    # 1. Determine OS Package Manager
     if command -v apt-get &>/dev/null; then
         pkg_manager="apt"
     elif command -v dnf &>/dev/null; then
@@ -318,15 +281,11 @@ check_and_install_dependencies() {
     elif command -v yum &>/dev/null; then
         pkg_manager="yum"
     fi
-
-    # 2. Determine Architecture for yq
     case "$(uname -m)" in
         x86_64) arch="amd64" ;;
         aarch64) arch="arm64" ;;
         *) arch="unsupported" ;;
     esac
-
-    # 3. Define dependencies
     declare -A deps=(
         [jq]=jq
         [skopeo]=skopeo
@@ -334,27 +293,19 @@ check_and_install_dependencies() {
         [timeout]=coreutils
         [wget]=wget
     )
-
     print_message "Checking for required command-line tools..." "INFO"
-
-    # Check for ALL dependencies
-
     if ! command -v docker &>/dev/null; then
         print_message "Docker is not installed. This is a critical dependency. Please follow the official instructions at https://docs.docker.com/engine/install/" "DANGER"
         manual_install_needed=true
     fi
-
     if ! command -v yq &>/dev/null; then
         yq_missing=true
     fi
-
     for cmd in "${!deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             missing_pkgs+=("${deps[$cmd]}")
         fi
     done
-
-    # Offer to install packages via the system's package manager
     if [ ${#missing_pkgs[@]} -gt 0 ]; then
         print_message "The following required packages can be installed via your package manager: ${missing_pkgs[*]}" "WARNING"
         if [ -n "$pkg_manager" ]; then
@@ -367,7 +318,6 @@ check_and_install_dependencies() {
                 else
                     install_cmd="sudo $pkg_manager install -y"
                 fi
-
                 if eval "$install_cmd ${missing_pkgs[*]}"; then
                     print_message "Package manager dependencies installed successfully." "GOOD"
                 else
@@ -383,8 +333,6 @@ check_and_install_dependencies() {
             exit 1
         fi
     fi
-
-    # Offer to download and install yq if it was missing
     if [ "$yq_missing" = true ]; then
         print_message "yq is not installed. It is required for parsing config.yml." "WARNING"
         if [ "$arch" == "unsupported" ]; then
@@ -407,25 +355,19 @@ check_and_install_dependencies() {
             fi
         fi
     fi
-
-    # Exit if manual installations are still required
     if [ "$manual_install_needed" = true ]; then
         print_message "Please address the manually installed dependencies listed above before running the script again." "DANGER"
         exit 1
     fi
-
-    # If we get here, all dependencies are met
     if [ "$yq_missing" = false ] && [ ${#missing_pkgs[@]} -eq 0 ]; then
          print_message "All required dependencies are installed." "GOOD"
     fi
 }
-
 print_message() {
     local message="$1"
     local color_type="$2"
     local color_code=""
     local log_output_no_color=""
-
     case "$color_type" in
         "INFO") color_code="$COLOR_CYAN" ;;
         "GOOD") color_code="$COLOR_GREEN" ;;
@@ -434,16 +376,13 @@ print_message() {
         "SUMMARY") color_code="$COLOR_MAGENTA" ;;
         *) color_code="$COLOR_RESET"; color_type="NONE" ;;
     esac
-
     log_output_no_color=$(echo "$message" | sed -r "s/\x1B\[[0-9;]*[mK]//g")
-
     local do_stdout_print=true
     if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
         if [ "$PRINT_MESSAGE_FORCE_STDOUT" = "false" ]; then
             do_stdout_print=false
         fi
     fi
-
     if [ "$do_stdout_print" = "true" ]; then
         if [[ "$color_type" == "NONE" ]]; then
             echo -e "${message}"
@@ -452,7 +391,6 @@ print_message() {
             echo -e "${colored_message_for_echo}"
         fi
     fi
-
     if [ -n "$LOG_FILE" ]; then
         local log_prefix_for_file="[${color_type}]"
         if [[ "$color_type" == "NONE" ]]; then log_prefix_for_file=""; fi
@@ -460,7 +398,7 @@ print_message() {
         if [ ! -d "$log_dir" ]; then
             if ! mkdir -p "$log_dir" &>/dev/null; then
                 echo -e "${COLOR_RED}[ERROR]${COLOR_RESET} Cannot create log directory '$log_dir'. Logging disabled." >&2
-                LOG_FILE="" # Disable logging for the rest of the script
+                LOG_FILE=""
             fi
         fi
         if [ -n "$LOG_FILE" ] && touch "$LOG_FILE" &>/dev/null; then
@@ -471,16 +409,13 @@ print_message() {
         fi
     fi
 }
-
 send_discord_notification() {
     local message="$1"
     local title="$2"
-
     if [[ "$DISCORD_WEBHOOK_URL" == *"your_discord_webhook_url_here"* || -z "$DISCORD_WEBHOOK_URL" ]]; then
         print_message "Discord webhook URL is not configured." "DANGER"
         return
     fi
-
     local json_payload
     json_payload=$(jq -n \
                   --arg title "$title" \
@@ -494,27 +429,21 @@ send_discord_notification() {
                       "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")'"
                     }]
                   }')
-
     run_with_retry curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
 }
-
 send_ntfy_notification() {
     local message="$1"
     local title="$2"
-
     if [[ "$NTFY_TOPIC" == "your_ntfy_topic_here" || -z "$NTFY_TOPIC" ]]; then
          print_message "Ntfy topic is not configured in config.yml." "DANGER"
          return
     fi
-
     local priority; priority=$(get_config_val ".notifications.ntfy.priority")
     local icon_url; icon_url=$(get_config_val ".notifications.ntfy.icon_url")
     local click_url; click_url=$(get_config_val ".notifications.ntfy.click_url")
-
-
     if [[ -n "$priority" && ! "$priority" =~ ^[1-5]$ ]]; then
         print_message "Invalid ntfy priority '$priority' in config.yml. Must be 1-5. Using default." "WARNING"
-        priority="" # Clear the invalid value
+        priority=""
     fi
     priority=${priority:-3}
     if [[ -n "$icon_url" && ! "$icon_url" =~ ^https?:// ]]; then
@@ -525,12 +454,10 @@ send_ntfy_notification() {
         print_message "Invalid ntfy click_url '$click_url' in config.yml. Must be a valid URL." "WARNING"
         click_url=""
     fi
-
     local curl_opts=()
     curl_opts+=("-s")
     curl_opts+=("-H" "Title: $title")
     curl_opts+=("-H" "Tags: warning")
-
     if [[ -n "$priority" ]]; then
         curl_opts+=("-H" "Priority: $priority")
     fi
@@ -543,11 +470,9 @@ send_ntfy_notification() {
     if [[ -n "$NTFY_ACCESS_TOKEN" ]]; then
         curl_opts+=("-H" "Authorization: Bearer $NTFY_ACCESS_TOKEN")
     fi
-
     curl_opts+=("-d" "$message")
     run_with_retry curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
-
 send_notification() {
     local message="$1"
     local title="$2"
@@ -556,7 +481,6 @@ send_notification() {
         "ntfy") send_ntfy_notification "$message" "$title" ;;
     esac
 }
-
 self_update() {
     echo "A new version of this script is available. Would you like to update now? (y/n)"
     read -r response
@@ -564,35 +488,26 @@ self_update() {
         UPDATE_SKIPPED=true
         return
     fi
-
-    # Create a temporary directory
     local temp_dir
     temp_dir=$(mktemp -d)
     if [ ! -d "$temp_dir" ]; then
         print_message "Failed to create temporary directory. Update aborted." "DANGER"
         exit 1
     fi
-
-    # Set a trap to automatically clean up the temporary directory on script exit
     trap 'rm -rf -- "$temp_dir"' EXIT
-
     local temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
     local temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
-
     print_message "Downloading new script version..." "INFO"
     if ! curl -sL "$SCRIPT_URL" -o "$temp_script"; then
         print_message "Failed to download the new script. Update aborted." "DANGER"
         exit 1
     fi
-
     print_message "Downloading checksum..." "INFO"
     if ! curl -sL "$CHECKSUM_URL" -o "$temp_checksum"; then
         print_message "Failed to download the checksum file. Update aborted." "DANGER"
         exit 1
     fi
-
     print_message "Verifying checksum..." "INFO"
-    # The sha256sum command must be run from the directory containing the files
     (cd "$temp_dir" && sha256sum -c "$(basename "$CHECKSUM_URL")" --quiet)
     if [ $? -ne 0 ]; then
         print_message "Checksum verification failed! The downloaded file may be corrupt. Update aborted." "DANGER"
@@ -606,44 +521,31 @@ self_update() {
         exit 1
     fi
     print_message "Syntax check passed." "GOOD"
-
-    # If all checks pass, move the new script into place
     if ! mv "$temp_script" "$0"; then
         print_message "Failed to replace the old script file. Update aborted." "DANGER"
         exit 1
     fi
     chmod +x "$0"
-
-    # Clean up the trap and temporary files before exiting
     trap - EXIT
     rm -rf -- "$temp_dir"
-
     print_message "Update successful. Please run the script again." "GOOD"
     exit 0
 }
-
 run_with_retry() {
-  local max_attempts=3 attempt=0 exit_code=0 output="" tmp_err
-  tmp_err=$(mktemp)
-  while :; do
-    output=$("$@" 2> "$tmp_err"); exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-      cat "$tmp_err" 1>&2
-      rm -f "$tmp_err"
-      echo "$output"
-      return 0
+    local output
+    local error_output
+    local exit_code
+    local tmp_err; tmp_err=$(mktemp)
+    output=$("$@" 2> "$tmp_err")
+    exit_code=$?
+    error_output=$(<"$tmp_err")
+    rm -f "$tmp_err"
+    if [ $exit_code -ne 0 ]; then
+        echo "Error: $error_output" >&2
     fi
-    attempt=$((attempt + 1))
-    if [ $attempt -ge $max_attempts ]; then
-      echo "Error: $(<"$tmp_err")" 1>&2
-      rm -f "$tmp_err"
-      echo "$output"
-      return $exit_code
-    fi
-    sleep $((2**attempt))
-  done
+    echo "$output"
+    return $exit_code
 }
-
 check_container_status() {
     local container_name="$1"; local inspect_data="$2"; local cpu_for_status_msg="$3"; local mem_for_status_msg="$4"
     local status health_status detailed_health
@@ -667,31 +569,22 @@ check_container_status() {
         fi
     fi
 }
-
 check_container_restarts() {
     local container_name="$1"; local inspect_data="$2"
-    local saved_restart_counts_json="$3" # accept saved state as an argument
-
+    local saved_restart_counts_json="$3"
     local current_restart_count is_restarting
     current_restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_data")
     is_restarting=$(jq -r '.[0].State.Restarting' <<< "$inspect_data")
-
-    # Get the previously saved restart count from the JSON state
     local saved_restart_count
     saved_restart_count=$(jq -r --arg name "$container_name" '.restarts[$name] // 0' <<< "$saved_restart_counts_json")
-
-    # Check for restart loops
     if [ "$is_restarting" = "true" ]; then
         print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container is currently restarting." "WARNING"; return 1
     fi
-    # Check if the restart count has increased
     if [ "$current_restart_count" -gt "$saved_restart_count" ]; then
         print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} Container has restarted (total: $current_restart_count)." "WARNING"; return 1
     fi
-
     print_message "  ${COLOR_BLUE}Restart Status:${COLOR_RESET} No new restarts detected (total: $current_restart_count)." "GOOD"; return 0
 }
-
 check_resource_usage() {
     local container_name="$1"; local cpu_percent="$2"; local mem_percent="$3"; local issues_found=0
     if [[ "$cpu_percent" =~ ^[0-9.]+$ ]]; then
@@ -714,44 +607,32 @@ check_resource_usage() {
     fi
     return $issues_found
 }
-
 check_disk_space() {
     local container_name="$1"; local inspect_data="$2"; local issues_found=0
     local num_mounts; num_mounts=$(jq -r '.[0].Mounts | length // 0' <<< "$inspect_data" 2>/dev/null)
     if ! [[ "$num_mounts" =~ ^[0-9]+$ ]] || [ "$num_mounts" -eq 0 ]; then
-        # This container has no mounts, which is fine. Exit silently.
         return 0
     fi
-
     for ((i=0; i<num_mounts; i++)); do
         local mp_destination
         mp_destination=$(jq -r ".[0].Mounts[$i].Destination // empty" <<< "$inspect_data" 2>/dev/null)
         if [ -z "$mp_destination" ]; then continue; fi
-
-        # Gracefully skip special virtual filesystems
         if [[ "$mp_destination" == *".sock" || "$mp_destination" == "/proc"* || "$mp_destination" == "/sys"* || "$mp_destination" == "/dev"* || "$mp_destination" == "/host/"* ]]; then
             continue
         fi
-
-        # Try to get disk usage, but don't warn if it fails.
         local disk_usage_output
         disk_usage_output=$(timeout 5 docker exec "$container_name" df -P "$mp_destination" 2>/dev/null)
         if [ $? -ne 0 ]; then
-            # The command failed, likely due to permissions or it's not a real filesystem. Skip it quietly.
             continue
         fi
-
         local disk_usage
         disk_usage=$(echo "$disk_usage_output" | awk 'NR==2 {val=$(NF-1); sub(/%$/,"",val); print val}')
-
-        # Only report if usage is high. This prevents repetitive "Normal usage" messages.
         if [[ "$disk_usage" =~ ^[0-9]+$ ]] && [ "$disk_usage" -ge "$DISK_SPACE_THRESHOLD" ]; then
             print_message "  ${COLOR_BLUE}Disk Space:${COLOR_RESET} High usage ($disk_usage%) at '$mp_destination' in '$container_name'." "WARNING"; issues_found=1
         fi
     done
     return $issues_found
 }
-
 check_network() {
     local container_name="$1"; local issues_found=0
     local network_stats; network_stats=$(timeout 5 docker exec "$container_name" cat /proc/net/dev 2>/dev/null)
@@ -773,18 +654,13 @@ check_network() {
     if [ $issues_found -eq 0 ]; then print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} No significant network issues detected for '$container_name'." "INFO"; fi
     return $issues_found
 }
-
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
     local state_json="$3"
-
-    # 1. Prerequisite and Initial Checks
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
     if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
-
-    # 2. Cache Check
     local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g')
     local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
     if [ -n "$cached_entry" ]; then
@@ -802,8 +678,6 @@ check_for_updates() {
             fi
         fi
     fi
-
-    # 3. Prepare for Live Check
     local current_tag="latest"
     local image_name_no_tag="$current_image_ref"
     if [[ "$current_image_ref" == *":"* ]]; then
@@ -820,7 +694,6 @@ check_for_updates() {
         image_path_for_skopeo="library/$image_name_no_tag"
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
-
     if [ -n "$DOCKER_CONFIG_PATH" ]; then
         local expanded_path; expanded_path=$(eval echo "$DOCKER_CONFIG_PATH")
         export DOCKER_CONFIG="${expanded_path%/*}"
@@ -829,7 +702,6 @@ check_for_updates() {
     if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
-
     get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
     get_update_strategy() { yq e ".containers.update_strategies.\"${1}\" // .containers.update_strategies.\"${1%%:*}\" // \"default\"" "$SCRIPT_DIR/config.yml" 2>/dev/null; }
     local strategy; strategy=$(get_update_strategy "$image_name_no_tag")
@@ -837,16 +709,13 @@ check_for_updates() {
     if [[ "$current_tag" =~ ^(latest|stable|rolling)$ ]]; then
         strategy="digest"
     fi
-
     local latest_stable_version=""
     local update_check_failed=false
     local error_message=""
-
     case "$strategy" in
         "digest")
             local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
             local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
-
             if [ -z "$local_digest" ]; then
                 error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
                 update_check_failed=true
@@ -890,8 +759,6 @@ check_for_updates() {
             fi
             ;;
     esac
-
-    # Final check and reporting
     if [ "$update_check_failed" = true ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $error_message" "DANGER" >&2
         echo "$error_message"
@@ -899,7 +766,6 @@ check_for_updates() {
     elif [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} No newer version found for '$image_name_no_tag' with strategy '$strategy'." "GOOD" >&2; return 0
     fi
-
     if [[ "$strategy" == "digest" ]]; then
         local summary_message="$latest_stable_version"
         local release_url; release_url=$(get_release_url "$image_name_no_tag")
@@ -918,18 +784,12 @@ check_for_updates() {
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2; return 0
     fi
 }
-
 check_logs() {
     local container_name="$1"
     local state_json="$2"
-    local raw_logs cli_stderr
-
-    # 1. Get previous state: last timestamp and last error block hash.
     local saved_state_obj; saved_state_obj=$(jq -r --arg name "$container_name" '.logs[$name] // "{}"' <<< "$state_json")
     local last_timestamp; last_timestamp=$(jq -r '.last_timestamp // ""' <<< "$saved_state_obj")
     local saved_hash; saved_hash=$(jq -r '.last_hash // ""' <<< "$saved_state_obj")
-
-    # 2. Build the docker logs command. ALWAYS include --timestamps.
     local docker_logs_cmd=("docker" "logs" "--timestamps")
     if [ -n "$last_timestamp" ]; then
         docker_logs_cmd+=("--since" "$last_timestamp")
@@ -937,76 +797,53 @@ check_logs() {
         docker_logs_cmd+=("--tail" "$LOG_LINES_TO_CHECK")
     fi
     docker_logs_cmd+=("$container_name")
-
-    # 3. Fetch logs, treating output as plain text and separating the command's stderr.
+    local raw_logs cli_stderr
     local tmp_err; tmp_err=$(mktemp)
     raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err")
-    local cmd_status=$?
-    cli_stderr=$(<"$tmp_err"); rm -f "$tmp_err"
-
-    if [ $cmd_status -ne 0 ]; then
-      print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} docker logs failed for '$container_name' (exit $cmd_status): $cli_stderr" "DANGER" >&2
-      echo "$saved_state_obj"; return 1
-    elif [ -n "$cli_stderr" ]; then
-      print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} docker logs emitted warnings: $cli_stderr" "WARNING" >&2
+    cli_stderr=$(<"$tmp_err")
+    rm -f "$tmp_err"
+    if [ -n "$cli_stderr" ]; then
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${PIPESTATUS[0]}. See logs for details." "DANGER" >&2
+        else
+        :
+        fi
     fi
-
     if [ -z "$raw_logs" ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new log entries." "GOOD" >&2
         echo "$saved_state_obj" && return 0
     fi
-
-    # 4. Fix boundary de-duplication: drop the first line if its timestamp matches the last cursor.
     local logs_to_process="$raw_logs"
     local first_line_ts; first_line_ts=$(echo "$raw_logs" | head -n 1 | awk '{print $1}')
     if [[ -n "$last_timestamp" && "$first_line_ts" == "$last_timestamp" ]]; then
         logs_to_process=$(echo "$raw_logs" | tail -n +2)
     fi
-
     if [ -z "$logs_to_process" ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new unique log entries since last check." "GOOD" >&2
         echo "$saved_state_obj" && return 0
     fi
-
-    # 5. Find errors in the processed text using grep (multiple -e form).
-    local grep_args=()
-    if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
-      for p in "${LOG_ERROR_PATTERNS[@]}"; do
-        grep_args+=(-e "$p")
-      done
-    else
-      grep_args+=(-e 'error' -e 'panic' -e 'fail' -e 'fatal')
-    fi
-
-    local current_errors
-    current_errors=$(echo "$logs_to_process" | grep -i -E -- "${grep_args[@]}")
-
-    # 6. Clean, hash, and compare errors if any were found.
+    local error_regex; error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]:-error|panic|fail|fatal}")
+    error_regex="${error_regex%|}"
+    local current_errors; current_errors=$(echo "$logs_to_process" | grep -i -E "$error_regex")
     local new_hash=""
     if [ -n "$current_errors" ]; then
         local cleaned_errors; cleaned_errors=$(echo "$current_errors" | sed -E "s/$LOG_CLEAN_PATTERN//")
         new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
     fi
-
-    # 7. Determine the new cursor timestamp from the VERY LAST raw log line.
     local new_last_timestamp; new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
     if ! [[ "$new_last_timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
         new_last_timestamp="$last_timestamp"
     fi
-
-    # 8. Echo the new, simplified state object and set the exit code for alerting.
     jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
       '{last_hash: $hash, last_timestamp: $ts}'
-
     if [[ -n "$new_hash" && "$new_hash" != "$saved_hash" ]]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New error patterns found." "WARNING" >&2
-        return 1 # New errors
+        return 1
     else
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Processed new logs, no new error patterns." "GOOD" >&2
-        return 0 # No new errors
+        return 0
     fi
 }
-
 save_logs() {
     local container_name="$1"; local log_file_name="${container_name}_logs_$(date '+%Y-%m-%d_%H-%M-%S').log"
     if docker logs "$container_name" > "$log_file_name" 2>"${log_file_name}.err"; then
@@ -1015,12 +852,10 @@ save_logs() {
         print_message "Error saving logs for '$container_name'. See '${log_file_name}.err'." "DANGER"
     fi
 }
-
-check_host_disk_usage() { # Echos output, does not call print_message directly
+check_host_disk_usage() {
     local target_filesystem="${HOST_DISK_CHECK_FILESYSTEM:-/}"
     local usage_line size_hr used_hr avail_hr capacity
     local output_string
-
     usage_line=$(df -Ph "$target_filesystem" 2>/dev/null | awk 'NR==2')
     if [ -n "$usage_line" ]; then
         size_hr=$(echo "$usage_line" | awk '{print $2}')
@@ -1037,8 +872,7 @@ check_host_disk_usage() { # Echos output, does not call print_message directly
     fi
     echo "$output_string"
 }
-
-check_host_memory_usage() { # Echos output, does not call print_message directly
+check_host_memory_usage() {
     local mem_line total_mem used_mem free_mem perc_used output_string
     if command -v free >/dev/null 2>&1; then
         read -r _ total_mem used_mem free_mem _ < <(free -m | awk 'NR==2')
@@ -1053,14 +887,12 @@ check_host_memory_usage() { # Echos output, does not call print_message directly
     fi
     echo "$output_string"
 }
-
 run_prune() {
     echo
     print_message "The prune command will run 'docker system prune -a'." "WARNING"
     print_message "This will remove ALL unused containers, networks, images, and the build cache." "WARNING"
     print_message "${COLOR_RED}This action is irreversible.${COLOR_RESET}" "NONE"
     echo
-
     local response
     read -rp "Are you absolutely sure you want to continue? (y/n): " response
     if [[ "$response" =~ ^[yY]$ ]]; then
@@ -1071,16 +903,12 @@ run_prune() {
         print_message "Prune operation cancelled." "INFO"
     fi
 }
-
 pull_new_image() {
     local container_name_to_update="$1"
     local update_details="$2"
-
     print_message "Getting image details for '$container_name_to_update'..." "INFO"
-
     local current_image_ref; current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
-    local image_to_pull="$current_image_ref" # Default to the current image
-
+    local image_to_pull="$current_image_ref"
     if [[ ! "$update_details" == *"New build found"* ]]; then
         local image_name_no_tag="${current_image_ref%:*}"
         local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
@@ -1088,7 +916,6 @@ pull_new_image() {
             image_to_pull="${image_name_no_tag}:${new_version}"
         fi
     fi
-
     print_message "Pulling new image: $image_to_pull" "INFO"
     if docker pull "$image_to_pull"; then
         print_message "Successfully pulled new image for '$container_name_to_update'." "GOOD"
@@ -1097,33 +924,26 @@ pull_new_image() {
         print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
     fi
 }
-
 process_container_update() {
     local container_name="$1"
     local update_details="$2"
-
     print_message "Starting guided update for '$container_name'..." "INFO"
-
     local inspect_json; inspect_json=$(docker inspect "$container_name" 2>/dev/null)
     if [ -z "$inspect_json" ]; then print_message "Failed to inspect container '$container_name'." "DANGER"; return 1; fi
-
     local working_dir; working_dir=$(jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""' <<< "$inspect_json")
     local service_name; service_name=$(jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""' <<< "$inspect_json")
     local config_files; config_files=$(jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""' <<< "$inspect_json")
     local current_image_ref; current_image_ref=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
-
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
         print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
-        pull_new_image "$container_name" "$update_details" # Fallback to just pulling
+        pull_new_image "$container_name" "$update_details"
         return
     fi
-
     local compose_cmd_base=("docker" "compose")
     if [ -n "$config_files" ]; then
         IFS=',' read -r -a files_array <<< "$config_files"
         for file in "${files_array[@]}"; do compose_cmd_base+=("-f" "$file"); done
     fi
-
     if [[ "$update_details" == *"New build found"* ]]; then
         print_message "Image uses a rolling tag. Proceeding with standard pull and recreate." "INFO"
         (
@@ -1137,7 +957,6 @@ process_container_update() {
         )
         return
     fi
-
     local image_name_no_tag="${current_image_ref%:*}"
     local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
     if [ -z "$new_version" ]; then
@@ -1145,17 +964,14 @@ process_container_update() {
         return 1
     fi
     local new_image_ref="${image_name_no_tag}:${new_version}"
-
     print_message "Pulling new image '${new_image_ref}'..." "INFO"
     if ! docker pull "$new_image_ref"; then
         print_message "Failed to pull new image '${new_image_ref}'. Aborting update." "DANGER"
         return 1
     fi
     print_message "Successfully pulled new image." "GOOD"
-
     print_message " ⚠ ${COLOR_YELLOW}The new image has been pulled. Now, the compose file must be updated to use it.${COLOR_RESET}" "WARNING"
     echo
-
     local main_compose_file="${config_files%%,*}"
     local full_compose_path
     if [[ "$main_compose_file" == /* ]]; then
@@ -1163,13 +979,11 @@ process_container_update() {
     else
         full_compose_path="$working_dir/$main_compose_file"
     fi
-
     print_message "GUIDE: In the file, change the image tag to version: ${COLOR_GREEN}${new_version}${COLOR_RESET}" "INFO"
     echo
     local edit_response
     read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
     if [[ "$edit_response" =~ ^[yY]$ ]]; then
-        # --- CORRECTED EDITOR LOGIC ---
         local editor_cmd
         if [ -n "$VISUAL" ]; then
             editor_cmd="$VISUAL"
@@ -1180,9 +994,7 @@ process_container_update() {
         else
             editor_cmd="/usr/bin/vi"
         fi
-
         "$editor_cmd" "$full_compose_path"
-
         local apply_response
         echo
         read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
@@ -1204,22 +1016,16 @@ process_container_update() {
         print_message "Manual edit skipped. Please edit '${full_compose_path}' and run 'docker compose up -d' manually." "WARNING"
     fi
 }
-
 run_interactive_update_mode() {
     print_message "Starting interactive update check..." "INFO"
-
     local containers_with_updates=()
-    local container_update_details=() # Array to store the detailed message
-
-    # 1. Find all running containers
+    local container_update_details=()
     mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
     if [ ${#all_containers[@]} -eq 0 ]; then
         print_message "No running containers found to check." "INFO"
         return
     fi
     print_message "Checking ${#all_containers[@]} containers for available updates..." "NONE"
-
-    # 2. Check each container for updates
     for container in "${all_containers[@]}"; do
         local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
         local update_details; update_details=$(check_for_updates "$container" "$current_image")
@@ -1228,31 +1034,22 @@ run_interactive_update_mode() {
             container_update_details+=("$update_details")
         fi
     done
-
-    # 3. If no updates, exit
     if [ ${#containers_with_updates[@]} -eq 0 ]; then
         print_message "All containers are up-to-date. Nothing to do. ✅" "GOOD"
         return
     fi
-
-    # 4. If updates are found, present the menu
     print_message "The following containers have updates available:" "INFO"
     for i in "${!containers_with_updates[@]}"; do
         echo -e "  ${COLOR_CYAN}[$((i + 1))]${COLOR_RESET} ${containers_with_updates[i]} (${COLOR_YELLOW}${container_update_details[i]}${COLOR_RESET})"
     done
     echo ""
-
-    # 5. Get user input
     read -rp "Enter the number(s) of the containers to update (e.g., '1' or '1,3'), or 'all', or press Enter to cancel: " choice
     if [ -z "$choice" ]; then
         print_message "Update cancelled by user." "INFO"
         return
     fi
-
-    # 6. Process the choice and pull images
 	local selections_to_process=()
 	local details_to_process=()
-
 	if [ "$choice" == "all" ]; then
     	    selections_to_process=("${containers_with_updates[@]}")
     	    details_to_process=("${container_update_details[@]}")
@@ -1268,57 +1065,43 @@ run_interactive_update_mode() {
 	        fi
 	    done
 	fi
-
         for i in "${!selections_to_process[@]}"; do
             local container_to_update="${selections_to_process[$i]}"
             local details_for_this_container="${details_to_process[$i]}"
-
             if [ "$RECREATE_MODE" = true ]; then
                 process_container_update "$container_to_update" "$details_for_this_container"
             else
                 pull_new_image "$container_to_update" "$details_for_this_container"
             fi
         done
-
-    # prune choice
     echo
     local prune_choice
     read -rp "${COLOR_YELLOW}Update process finished. Would you like to clean up the system now? (y/n): ${COLOR_RESET}" prune_choice
     if [[ "$prune_choice" =~ ^[yY]$ ]]; then
         run_prune
     fi
-
     print_message "Interactive update process finished." "INFO"
 }
-
-print_summary() { # Uses print_message with FORCE_STDOUT
+print_summary() {
   local container_name_summary issues issue_emoji
   local printed_containers=()
   local host_disk_summary_output host_memory_summary_output
-
-  PRINT_MESSAGE_FORCE_STDOUT=true # Enable stdout for all messages within this function
-
+  PRINT_MESSAGE_FORCE_STDOUT=true
   print_message "-------------------------- Host System Stats ---------------------------" "SUMMARY"
   host_disk_summary_output=$(check_host_disk_usage)
   host_memory_summary_output=$(check_host_memory_usage)
-
   print_message "$host_disk_summary_output" "SUMMARY"
   print_message "$host_memory_summary_output" "SUMMARY"
-
   if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
     print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
     print_message "The following containers have warnings or errors:" "SUMMARY"
-
     for container_name_summary in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
     	local already_printed=0
 	for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
     	if [[ "$already_printed" -eq 1 ]]; then continue; fi
     	printed_containers+=("$container_name_summary")
-
     	local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
     	local emoji_string=""
-
-    	# Build a string of all applicable emojis
     	if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
     	if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
     	if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
@@ -1327,17 +1110,12 @@ print_summary() { # Uses print_message with FORCE_STDOUT
     	if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
 	if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
     	if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
-
-    	# Print the container name with its emoji string
     	print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
-
-    	# Split the detailed issues by the pipe delimiter and print each one
     	IFS='|' read -r -a issue_array <<< "$issues"
     	for issue_detail in "${issue_array[@]}"; do
             print_message "  - ${issue_detail}" "WARNING"
     	done
     done
-
   else
     print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
     print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
@@ -1346,15 +1124,11 @@ print_summary() { # Uses print_message with FORCE_STDOUT
 
   PRINT_MESSAGE_FORCE_STDOUT=false # Reset the flag
 }
-
 perform_checks_for_container() {
     local container_name_or_id="$1"
     local results_dir="$2"
-    local state_json_string="$CURRENT_STATE_JSON_STRING" # Read state from environment
-
-    # Redirect stdout to a log file for this container's check
+    local state_json_string="$CURRENT_STATE_JSON_STRING"
     exec &> "$results_dir/$container_name_or_id.log"
-
     print_message "${COLOR_BLUE}Container:${COLOR_RESET} ${container_name_or_id}" "INFO"
     local inspect_json; inspect_json=$(docker inspect "$container_name_or_id" 2>/dev/null)
     if [ -z "$inspect_json" ]; then
@@ -1362,11 +1136,9 @@ perform_checks_for_container() {
         echo "Not Found" > "$results_dir/$container_name_or_id.issues"
         return
     fi
-
     local container_actual_name; container_actual_name=$(jq -r '.[0].Name' <<< "$inspect_json" | sed 's|^/||')
     local current_restart_count; current_restart_count=$(jq -r '.[0].RestartCount' <<< "$inspect_json")
     echo "$current_restart_count" > "$results_dir/$container_actual_name.restarts" # Save current restart count
-
     local stats_json; stats_json=$(docker stats --no-stream --format '{{json .}}' "$container_name_or_id" 2>/dev/null)
     local cpu_percent="N/A"; local mem_percent="N/A"
     if [ -n "$stats_json" ]; then
@@ -1375,33 +1147,25 @@ perform_checks_for_container() {
     else
         print_message "  ${COLOR_BLUE}Stats:${COLOR_RESET} Could not retrieve stats for '$container_actual_name'." "WARNING"
     fi
-
     local issue_tags=()
     check_container_status "$container_actual_name" "$inspect_json" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Status"); fi
-    # Pass the state JSON string as the third argument
     check_container_restarts "$container_actual_name" "$inspect_json" "$state_json_string"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
     check_resource_usage "$container_actual_name" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Resources"); fi
     check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
     check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
-
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
-
-    # Capture all output to determine if the check was cached, and pass the state string
     local update_output; update_output=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update" "$state_json_string" 2>&1)
     local update_exit_code=$?
-    local update_details; update_details=$(echo "$update_output" | tail -n 1) # Message is always last line
+    local update_details; update_details=$(echo "$update_output" | tail -n 1)
 
     if [ "$update_exit_code" -ne 0 ]; then
 	issue_tags+=("Updates: $update_details")
     fi
-
-    # If not, it was a live check and the result should be cached for next time.
     if ! echo "$update_output" | grep -q "(cached)"; then
         local cache_key; cache_key=$(echo "$current_image_ref_for_update" | sed 's/[/:]/_/g')
         jq -n --arg key "$cache_key" --arg img_ref "$current_image_ref_for_update" --arg msg "$update_details" --argjson code "$update_exit_code" \
           '{key: $key, image_ref: $img_ref, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
-
     local new_log_state_json
     new_log_state_json=$(check_logs "$container_actual_name" "$state_json_string")
     if [ $? -ne 0 ]; then
@@ -1416,19 +1180,12 @@ perform_checks_for_container() {
 
 # --- Main Execution ---
 main() {
-    # Help, show script commands
     if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
         print_help
         return 0
     fi
-
-    # 1. Check for and offer to install any missing dependencies
     check_and_install_dependencies
-
-    # 2. Load all configuration from files and environment variables
     load_configuration
-
-    # 3. Handle the --no-update flag before doing anything else
     local run_update_check=true
     declare -a initial_args=("$@")
     for arg in "$@"; do
@@ -1437,15 +1194,12 @@ main() {
             break
         fi
     done
-    # 3a. --prune flag
     for arg in "$@"; do
         if [[ "$arg" == "--prune" ]]; then
             run_prune
             exit 0
         fi
     done
-
-    # 4. Check for script updates if not skipped
     if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
         local latest_version
         latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
@@ -1453,31 +1207,23 @@ main() {
             self_update
         fi
     fi
-
-    # 5. Determine script mode before printing header
     if [[ " ${initial_args[*]} " =~ " --pull " ]]; then
         INTERACTIVE_UPDATE_MODE=true
     fi
     if [[ " ${initial_args[*]} " =~ " summary " ]]; then
         SUMMARY_ONLY_MODE=true
     fi
-
-    # 6. Print the header box for manual runs, checking for terminal compatibility
     if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
         if [ -t 1 ] && tput colors &>/dev/null && [ "$(tput colors)" -ge 8 ]; then
             print_header_box
         else
-            # Simple fallback for incompatible terminals
             echo "--- Container Monitor ${VERSION} ---"
         fi
     fi
-
-    # --- Initialize arrays for this run ---
     declare -a CONTAINERS_TO_CHECK=()
     declare -a WARNING_OR_ERROR_CONTAINERS=()
     declare -A CONTAINER_ISSUES_MAP
     declare -a CONTAINERS_TO_EXCLUDE=()
-
     declare -a remaining_args=()
     for arg in "$@"; do
         case "$arg" in
@@ -1489,7 +1235,6 @@ main() {
                 RECREATE_MODE=true
                 INTERACTIVE_UPDATE_MODE=true
                 ;;
-            # Ignore flags already processed
             --no-update|--pull|summary)
                 ;;
             *)
@@ -1498,44 +1243,35 @@ main() {
         esac
     done
     set -- "${remaining_args[@]}"
-
-    # --- Handle Different Execution Modes ---
     if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
         run_interactive_update_mode
         return 0
     fi
-
     if [ "$#" -gt 0 ]; then
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             case "$1" in
                 logs)
-                    shift # Move past "logs"
+                    shift
                     if [ -z "$1" ]; then
                         print_message "Usage: $0 logs <container_name> [filter1] [filter2] ..." "DANGER"
                         return 1
                     fi
                     local container_to_log="$1"
                     shift
-
                     if [ $# -eq 0 ]; then
                         print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
                         docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
                     else
                         local all_args_string="$*"
                         local processed_args_string="${all_args_string//,/' '}"
-
                         local final_patterns=()
                         read -r -a final_patterns <<< "$processed_args_string"
-
                         local egrep_pattern
                         egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
-
                         local filter_list
                         filter_list=$(printf "'%s' " "${final_patterns[@]}")
-
                         print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
-
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto -- "$egrep_pattern"
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
                     fi
                     return 0
                     ;;
@@ -1553,14 +1289,10 @@ main() {
                     CONTAINERS_TO_CHECK=("$@")
                     ;;
             esac
-
         else
-            # If in summary mode, all remaining args are container names
             CONTAINERS_TO_CHECK=("$@")
         fi
     fi
-
-    # --- Determine Containers to Monitor ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
         if [ -n "$CONTAINER_NAMES" ]; then
             IFS=',' read -r -a temp_env_names <<< "$CONTAINER_NAMES"
@@ -1575,8 +1307,6 @@ main() {
             if [ ${#all_running_names[@]} -gt 0 ]; then CONTAINERS_TO_CHECK=("${all_running_names[@]}"); fi
         fi
     fi
-
-    # Filter out excluded containers
     if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
         local temp_containers_to_check=()
         for container in "${CONTAINERS_TO_CHECK[@]}"; do
@@ -1593,12 +1323,8 @@ main() {
         done
         CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
     fi
-
-    # --- Run Monitoring ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
-
-        # Stale lock file cleanup with PID check
         if [ -f "$LOCK_FILE" ]; then
             local locked_pid; locked_pid=$(cat "$LOCK_FILE")
             if ! ps -p "$locked_pid" > /dev/null; then
@@ -1606,8 +1332,6 @@ main() {
                 rm -f "$LOCK_FILE"
             fi
         fi
-
-        # Acquire lock, waiting up to LOCK_TIMEOUT_SECONDS
         local lock_start_time; lock_start_time=$(date +%s)
         while ! ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; do
             local current_time; current_time=$(date +%s)
@@ -1618,24 +1342,18 @@ main() {
             sleep 1
         done
         trap 'rm -f "$LOCK_FILE"' EXIT
-
-        # Ensure state file exists and has basic structure
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
         fi
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
-
-        # Release lock before starting parallel jobs
         rm -f "$LOCK_FILE"
         trap - EXIT
-
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
                    check_resource_usage check_disk_space check_network check_for_updates check_logs
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
                NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS
-
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
@@ -1667,11 +1385,9 @@ main() {
             local progress_pid=$!
             exec 3> progress_pipe
         fi
-
         # Export the state as an environment variable so it's available to sub-shells
         export CURRENT_STATE_JSON_STRING="$current_state_json"
         printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
-
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             exec 3>&-
             wait "$progress_pid"
@@ -1684,7 +1400,6 @@ main() {
                 fi
             done
         fi
-
         for issue_file in "$results_dir"/*.issues; do
             if [ -f "$issue_file" ]; then
                 local container_name; container_name=$(basename "$issue_file" .issues)
@@ -1693,10 +1408,7 @@ main() {
                 CONTAINER_ISSUES_MAP["$container_name"]="$issues"
             fi
         done
-
         print_summary
-
-        # --- Notification Logic ---
         if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
             local notify_issues=false
@@ -1704,9 +1416,7 @@ main() {
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
                 local filtered_issues_array=()
-
                 IFS='|' read -r -a issue_array <<< "$issues"
-
                 for issue in "${issue_array[@]}"; do
                     for notify_issue in "${notify_on_array[@]}"; do
                         if [[ "${notify_issue,,}" == "updates" && "$issue" == Update* ]] || [[ "${issue,,}" == "${notify_issue,,}" ]]; then
@@ -1723,7 +1433,6 @@ main() {
                     summary_message+="\n[$container]\n- $filtered_issues_str\n"
                 fi
             done
-
             if [ "$notify_issues" = true ]; then
                 summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
                 if [ -n "$summary_message" ]; then
@@ -1732,9 +1441,6 @@ main() {
                 fi
             fi
         fi
-
-        # --- UPDATE AND SAVE STATE ---
-        # Re-acquire lock to safely write the new state
         local lock_acquired=false
         for ((i=0; i<LOCK_TIMEOUT_SECONDS*10; i++)); do
             if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
@@ -1744,20 +1450,13 @@ main() {
             fi
             sleep 0.1
         done
-
         if [ "$lock_acquired" = false ]; then
             print_message "Could not acquire lock for state update after $LOCK_TIMEOUT_SECONDS seconds." "DANGER"
             rm -rf "$results_dir"
             return 1
         fi
-
-        # Start with the last known state
         local new_state_json; new_state_json=$(cat "$STATE_FILE")
-
-        # Ensure all top-level keys exist as objects to prevent null errors
         new_state_json=$(jq '.restarts = (.restarts // {}) | .logs = (.logs // {}) | .updates = (.updates // {})' <<< "$new_state_json")
-
-        # Merge all results from temporary files
         for restart_file in "$results_dir"/*.restarts; do
             if [ -f "$restart_file" ]; then
                 local container_name; container_name=$(basename "$restart_file" .restarts)
@@ -1765,7 +1464,6 @@ main() {
                 new_state_json=$(jq --arg name "$container_name" --argjson val "$count" '.restarts[$name] = $val' <<< "$new_state_json")
             fi
         done
-
         for log_state_file in "$results_dir"/*.log_state; do
             if [ -f "$log_state_file" ]; then
                 local container_name; container_name=$(basename "$log_state_file" .log_state)
@@ -1775,7 +1473,6 @@ main() {
                 fi
             fi
         done
-
         for cache_update_file in "$results_dir"/*.update_cache; do
             if [ -f "$cache_update_file" ]; then
                 local cache_data; cache_data=$(cat "$cache_update_file")
@@ -1784,24 +1481,17 @@ main() {
                 new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
             fi
         done
-
-        # Perform final cleanup on the state object
         mapfile -t all_system_containers < <(docker ps -a --format '{{.Names}}')
         local all_system_containers_json; all_system_containers_json=$(printf '%s\n' "${all_system_containers[@]}" | jq -R . | jq -s .)
-
         new_state_json=$(jq --argjson valid_names "$all_system_containers_json" '
             .restarts = (.restarts | with_entries(select(.key as $k | $valid_names | index($k)))) |
             .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
         ' <<< "$new_state_json")
-
-
-        # Write the final state and clean up
         echo "$new_state_json" > "$STATE_FILE"
         rm -f "$LOCK_FILE"
         trap - EXIT
         rm -rf "$results_dir"
     fi
-
     PRINT_MESSAGE_FORCE_STDOUT=true
     if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
         print_message "Summary generation completed." "SUMMARY"
@@ -1812,5 +1502,4 @@ main() {
         print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
     fi
 }
-
 main "$@"
