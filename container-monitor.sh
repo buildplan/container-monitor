@@ -854,7 +854,7 @@ check_for_updates() {
     case "$strategy" in
         "digest")
             local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
-            local local_digest; local_digest=$(jq -r '.[0].RepoDigests[0] | splitOn("@")[1]' <<< "$local_inspect")
+            local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | splitOn("@")[1]) // (.[0].RepoDigests[0]? | splitOn("@")[1])' <<< "$local_inspect")
 
             if [ -z "$local_digest" ]; then
                 print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'." "WARNING" >&2; update_check_failed=true
@@ -956,7 +956,11 @@ check_logs() {
     rm -f "$tmp_err"
 
     if [ -n "$cli_stderr" ]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command returned an error for '$container_name': $cli_stderr" "DANGER" >&2
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${PIPESTATUS[0]}. See logs for details." "DANGER" >&2
+        else
+        :
+        fi
     fi
 
     if [ -z "$raw_logs" ]; then
@@ -1735,18 +1739,20 @@ main() {
             fi
             sleep 0.1
         done
+
         if [ "$lock_acquired" = false ]; then
             print_message "Could not acquire lock for state update after $LOCK_TIMEOUT_SECONDS seconds." "DANGER"
             rm -rf "$results_dir"
             return 1
         fi
 
-        local new_state_json="$current_state_json"
+        # Start with the last known state
+        local new_state_json; new_state_json=$(cat "$STATE_FILE")
 
-        # --- Run-time cache to de-duplicate update checks ---
-        declare -A RUNTIME_UPDATE_CACHE
+        # Ensure all top-level keys exist as objects to prevent null errors
+        new_state_json=$(jq '.restarts = (.restarts // {}) | .logs = (.logs // {}) | .updates = (.updates // {})' <<< "$new_state_json")
 
-        # Update restart counts
+        # Merge all results from temporary files
         for restart_file in "$results_dir"/*.restarts; do
             if [ -f "$restart_file" ]; then
                 local container_name; container_name=$(basename "$restart_file" .restarts)
@@ -1754,39 +1760,27 @@ main() {
                 new_state_json=$(jq --arg name "$container_name" --argjson val "$count" '.restarts[$name] = $val' <<< "$new_state_json")
             fi
         done
-        # Update caches from live checks
-        for cache_update_file in "$results_dir"/*.update_cache; do
-            if [ -f "$cache_update_file" ]; then
-                local cache_data; cache_data=$(cat "$cache_update_file")
-                local image_ref; image_ref=$(jq -r '.image_ref' <<< "$cache_data")
 
-                # Only process this update if we haven't already cached it this run
-                if [[ -z "${RUNTIME_UPDATE_CACHE[$image_ref]}" ]]; then
-                    local key; key=$(jq -r '.key' <<< "$cache_data")
-                    local data; data=$(jq -r '.data' <<< "$cache_data")
-                    new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
-
-                    # Mark this image_ref as processed for this run
-                    RUNTIME_UPDATE_CACHE["$image_ref"]=1
-                fi
-            fi
-        done
-
-        # Update log state (timestamp and hash)
         for log_state_file in "$results_dir"/*.log_state; do
             if [ -f "$log_state_file" ]; then
                 local container_name; container_name=$(basename "$log_state_file" .log_state)
                 local log_state_obj; log_state_obj=$(cat "$log_state_file")
-
-                if jq -e '.last_timestamp | test(".+")' <<< "$log_state_obj" >/dev/null; then
+                if jq -e '.last_timestamp' <<< "$log_state_obj" >/dev/null; then
                     new_state_json=$(jq --arg name "$container_name" --argjson val "$log_state_obj" '.logs[$name] = $val' <<< "$new_state_json")
-                else
-                    new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name]?)' <<< "$new_state_json")
                 fi
             fi
         done
 
-        # State file cleanup logic
+        for cache_update_file in "$results_dir"/*.update_cache; do
+            if [ -f "$cache_update_file" ]; then
+                local cache_data; cache_data=$(cat "$cache_update_file")
+                local key; key=$(jq -r '.key' <<< "$cache_data")
+                local data; data=$(jq -r '.data' <<< "$cache_data")
+                new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
+            fi
+        done
+
+        # Perform final cleanup on the state object
         mapfile -t all_system_containers < <(docker ps -a --format '{{.Names}}')
         local all_system_containers_json; all_system_containers_json=$(printf '%s\n' "${all_system_containers[@]}" | jq -R . | jq -s .)
 
@@ -1795,11 +1789,11 @@ main() {
             .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
         ' <<< "$new_state_json")
 
-        # Write the new state and release the lock
+
+        # Write the final state and clean up
         echo "$new_state_json" > "$STATE_FILE"
         rm -f "$LOCK_FILE"
         trap - EXIT
-
         rm -rf "$results_dir"
     fi
 
