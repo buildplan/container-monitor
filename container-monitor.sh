@@ -1406,8 +1406,6 @@ perform_checks_for_container() {
 }
 
 # --- Main Execution ---
-# container-monitor.sh
-
 main() {
     # Help, show script commands
     if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -1591,7 +1589,7 @@ main() {
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
 
-        # --- NEW: Stale lock file cleanup with PID check ---
+        # --- Stale lock file cleanup with PID check ---
         if [ -f "$LOCK_FILE" ]; then
             local locked_pid; locked_pid=$(cat "$LOCK_FILE")
             # Check if the PID in the lock file is still running
