@@ -151,7 +151,7 @@ load_configuration() {
     # Set all configuration variables
     set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
     set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
-    set_final_config "LOG_CLEAN_PATTERN"             ".logs.log_clean_pattern"               "$_SCRIPT_DEFAULT_LOG_CLEAN_PATTERN" # <-- ADDED
+    set_final_config "LOG_CLEAN_PATTERN"             ".logs.log_clean_pattern"               "$_SCRIPT_DEFAULT_LOG_CLEAN_PATTERN"
     set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
     set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
     set_final_config "DISK_SPACE_THRESHOLD"          ".thresholds.disk_space"                "$_SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD"
@@ -166,6 +166,7 @@ load_configuration() {
     set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
     set_final_config "DOCKER_USERNAME"               ".auth.docker_username"                 ""
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
+    set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "~/.docker/config.json"
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>&1); then
@@ -782,16 +783,16 @@ check_network() {
 
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
-    local state_json="$3" # Accept full state JSON
+    local state_json="$3"
 
     # 1. Prerequisite and Initial Checks
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
-    if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
+    if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha265: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
 
-    # 2. Check for a valid cache entry first
-    local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g') # Create a valid JSON key
+    # 2. Cache Check
+    local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g')
     local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
     if [ -n "$cached_entry" ]; then
         local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
@@ -826,19 +827,23 @@ check_for_updates() {
         image_path_for_skopeo="library/$image_name_no_tag"
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
+
     local skopeo_opts=()
-    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+    if [ -n "$DOCKER_CONFIG_PATH" ]; then
+        # Use auth file if specified (preferred method)
+        local expanded_path; expanded_path=$(eval echo "$DOCKER_CONFIG_PATH")
+        if [ -f "$expanded_path" ]; then
+            skopeo_opts+=("--authfile" "$expanded_path")
+        fi
+    elif [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        # Fallback to direct credentials
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
-    get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
 
-    # Helper to read the strategy from config.yml, falling back to "default"
-    get_update_strategy() {
-        yq e ".containers.update_strategies.\"${1}\" // .containers.update_strategies.\"${1%%:*}\" // \"default\"" "$SCRIPT_DIR/config.yml" 2>/dev/null
-    }
+    get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
+    get_update_strategy() { yq e ".containers.update_strategies.\"${1}\" // .containers.update_strategies.\"${1%%:*}\" // \"default\"" "$SCRIPT_DIR/config.yml" 2>/dev/null; }
     local strategy; strategy=$(get_update_strategy "$image_name_no_tag")
 
-    # Always treat 'latest' tag as a digest check, regardless of strategy
     if [ "$current_tag" == "latest" ]; then
         strategy="digest"
     fi
@@ -848,39 +853,53 @@ check_for_updates() {
 
     case "$strategy" in
         "digest")
-            local local_digest; local_digest=$(docker inspect -f '{{index .RepoDigests 0}}' "$current_image_ref" 2>/dev/null | cut -d'@' -f2)
+            local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
+            local local_digest; local_digest=$(jq -r '.[0].RepoDigests[0] | splitOn("@")[1]' <<< "$local_inspect")
+
             if [ -z "$local_digest" ]; then
                 print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'." "WARNING" >&2; update_check_failed=true
             else
-                local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:${current_tag}" 2>&1)
+                local remote_inspect; remote_inspect=$(run_with_retry skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:${current_tag}" 2>&1)
                 if [ $? -ne 0 ]; then
                     print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'." "DANGER" >&2; update_check_failed=true
                 else
-                    local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$skopeo_output")
+                    local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$remote_inspect")
                     if [ "$remote_digest" != "$local_digest" ]; then
-                        latest_stable_version="New image available for tag '${current_tag}'"
+                        # Digests differ, gather more context for the operator.
+                        local local_created; local_created=$(jq -r '.[0].Created' <<< "$local_inspect")
+                        local local_size; local_size=$(jq -r '.[0].Size' <<< "$local_inspect")
+                        local remote_created; remote_created=$(jq -r '.Created' <<< "$remote_inspect")
+                        local remote_size; remote_size=$(jq -r '.Size' <<< "$remote_inspect")
+
+                        # Calculate size delta and make it human-readable
+                        local size_delta=$((remote_size - local_size))
+                        local human_readable_delta
+                        human_readable_delta=$(awk -v delta="$size_delta" 'BEGIN {
+                            s="B K M G T P E Z Y"; split(s, a);
+                            sig=delta<0?"-":"+"; delta=delta<0?-delta:delta;
+                            while(delta >= 1024 && length(s) > 1) { delta /= 1024; s=substr(s, 3) }
+                            printf "%s%.1f%s", sig, delta, substr(s, 1, 1)
+                        }')
+
+                        # Format dates for readability
+                        local remote_date; remote_date=$(date -d "$remote_created" +"%Y-%m-%d %H:%M")
+
+                        latest_stable_version="New build found (Created: $remote_date, Size Δ: ${human_readable_delta}B)"
                     fi
                 fi
             fi
             ;;
 
-        "semver")
-            # Strict X.Y.Z filter.
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
-            ;;
-
-        "major-lock")
-            # Dynamic filter based on current tag.
-            local major_version="${current_tag%%.*}"
-            local variant=""
-            if [[ "$current_tag" == *"-"* ]]; then
-                variant="-${current_tag#*-}"
+        "semver" | "major-lock" | *)
+            if [ "$strategy" == "semver" ]; then
+                latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
+            elif [ "$strategy" == "major-lock" ]; then
+                local major_version="${current_tag%%.*}"; local variant=""
+                if [[ "$current_tag" == *"-"* ]]; then variant="-${current_tag#*-}"; fi
+                latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E "^${major_version}(\.[0-9]+)*${variant}$" | sort -V | tail -n 1)
+            else # Default
+                latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
             fi
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E "^${major_version}(\.[0-9]+)*${variant}$" | sort -V | tail -n 1)
-            ;;
-
-        *) # "default" logicg
-            latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
             ;;
     esac
 
@@ -888,13 +907,10 @@ check_for_updates() {
     if [ "$update_check_failed" = true ]; then
         return 1
     elif [ -z "$latest_stable_version" ]; then
-        # This can happen if no tags match the filter, which is not an error.
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} No newer version found for '$image_name_no_tag' with strategy '$strategy'." "GOOD" >&2; return 0
     fi
 
-    # Compare versions
     if [[ "$strategy" == "digest" ]]; then
-        # For digest, latest_stable_version is a message, not a version number
         local summary_message="$latest_stable_version"
         local release_url; release_url=$(get_release_url "$image_name_no_tag")
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi

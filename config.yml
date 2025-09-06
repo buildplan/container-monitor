@@ -25,6 +25,9 @@ logs:
 auth:
   docker_username: ""
   docker_password: ""
+  # Path to your Docker config.json for authentication.
+  # Defaults to ~/.docker/config.json if not set.
+  docker_config_path: "~/.docker/config.json"
 
 thresholds:
   cpu_warning: 80
