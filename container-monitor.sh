@@ -820,7 +820,6 @@ check_for_updates() {
 
     if [ -n "$DOCKER_CONFIG_PATH" ]; then
         local expanded_path; expanded_path=$(eval echo "$DOCKER_CONFIG_PATH")
-        # The var needs to point to the directory, not the file.
         export DOCKER_CONFIG="${expanded_path%/*}"
     fi
     local skopeo_opts=()
