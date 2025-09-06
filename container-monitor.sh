@@ -623,22 +623,25 @@ self_update() {
 }
 
 run_with_retry() {
-    local output
-    local error_output
-    local exit_code
-
-    local tmp_err; tmp_err=$(mktemp)
-    output=$("$@" 2> "$tmp_err")
-    exit_code=$?
-    error_output=$(<"$tmp_err")
-    rm -f "$tmp_err"
-
-    if [ $exit_code -ne 0 ]; then
-        echo "Error: $error_output" >&2
+  local max_attempts=3 attempt=0 exit_code=0 output="" tmp_err
+  tmp_err=$(mktemp)
+  while :; do
+    output=$("$@" 2> "$tmp_err"); exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+      cat "$tmp_err" 1>&2
+      rm -f "$tmp_err"
+      echo "$output"
+      return 0
     fi
-
-    echo "$output"
-    return $exit_code
+    attempt=$((attempt + 1))
+    if [ $attempt -ge $max_attempts ]; then
+      echo "Error: $(<"$tmp_err")" 1>&2
+      rm -f "$tmp_err"
+      echo "$output"
+      return $exit_code
+    fi
+    sleep $((2**attempt))
+  done
 }
 
 check_container_status() {
@@ -919,6 +922,7 @@ check_for_updates() {
 check_logs() {
     local container_name="$1"
     local state_json="$2"
+    local raw_logs cli_stderr
 
     # 1. Get previous state: last timestamp and last error block hash.
     local saved_state_obj; saved_state_obj=$(jq -r --arg name "$container_name" '.logs[$name] // "{}"' <<< "$state_json")
@@ -934,20 +938,17 @@ check_logs() {
     fi
     docker_logs_cmd+=("$container_name")
 
-
     # 3. Fetch logs, treating output as plain text and separating the command's stderr.
-    local raw_logs cli_stderr
     local tmp_err; tmp_err=$(mktemp)
     raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err")
-    cli_stderr=$(<"$tmp_err")
-    rm -f "$tmp_err"
+    local cmd_status=$?
+    cli_stderr=$(<"$tmp_err"); rm -f "$tmp_err"
 
-    if [ -n "$cli_stderr" ]; then
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${PIPESTATUS[0]}. See logs for details." "DANGER" >&2
-        else
-        :
-        fi
+    if [ $cmd_status -ne 0 ]; then
+      print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} docker logs failed for '$container_name' (exit $cmd_status): $cli_stderr" "DANGER" >&2
+      echo "$saved_state_obj"; return 1
+    elif [ -n "$cli_stderr" ]; then
+      print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} docker logs emitted warnings: $cli_stderr" "WARNING" >&2
     fi
 
     if [ -z "$raw_logs" ]; then
@@ -967,10 +968,18 @@ check_logs() {
         echo "$saved_state_obj" && return 0
     fi
 
-    # 5. Find errors in the processed text using grep.
-    local error_regex; error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]:-error|panic|fail|fatal}")
-    error_regex="${error_regex%|}"
-    local current_errors; current_errors=$(echo "$logs_to_process" | grep -i -E "$error_regex")
+    # 5. Find errors in the processed text using grep (multiple -e form).
+    local grep_args=()
+    if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
+      for p in "${LOG_ERROR_PATTERNS[@]}"; do
+        grep_args+=(-e "$p")
+      done
+    else
+      grep_args+=(-e 'error' -e 'panic' -e 'fail' -e 'fatal')
+    fi
+
+    local current_errors
+    current_errors=$(echo "$logs_to_process" | grep -i -E -- "${grep_args[@]}")
 
     # 6. Clean, hash, and compare errors if any were found.
     local new_hash=""
@@ -1526,7 +1535,7 @@ main() {
 
                         print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
 
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
+                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto -- "$egrep_pattern"
                     fi
                     return 0
                     ;;
