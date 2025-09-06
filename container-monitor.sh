@@ -532,16 +532,22 @@ self_update() {
     exit 0
 }
 run_with_retry() {
+    local max_attempts=3
+    local attempt=0
+    local exit_code=0
     local output
-    local error_output
-    local exit_code
-    local tmp_err; tmp_err=$(mktemp)
-    output=$("$@" 2> "$tmp_err")
+    output=$("$@" 2> >(tee /dev/stderr))
     exit_code=$?
-    error_output=$(<"$tmp_err")
-    rm -f "$tmp_err"
+    while [ $exit_code -ne 0 ] && [ $attempt -lt $max_attempts ]; do
+        attempt=$((attempt + 1))
+        local sleep_time=$((2**attempt))
+        print_message "Command failed. Retrying in ${sleep_time}s... (Attempt ${attempt}/${max_attempts})" "WARNING"
+        sleep "$sleep_time"
+        output=$("$@" 2> >(tee /dev/stderr))
+        exit_code=$?
+    done
     if [ $exit_code -ne 0 ]; then
-        echo "Error: $error_output" >&2
+        print_message "Command failed after $max_attempts attempts." "DANGER"
     fi
     echo "$output"
     return $exit_code
