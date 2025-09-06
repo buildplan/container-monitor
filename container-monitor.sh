@@ -623,30 +623,20 @@ self_update() {
 }
 
 run_with_retry() {
-    local max_attempts=3
-    local attempt=0
-    local exit_code=0
-
-    # Hide stdout of the command, but show stderr on failure
-    # Pass stdout through on success
     local output
-    output=$("$@" 2> >(tee /dev/stderr))
-    exit_code=$?
+    local error_output
+    local exit_code
 
-    while [ $exit_code -ne 0 ] && [ $attempt -lt $max_attempts ]; do
-        attempt=$((attempt + 1))
-        local sleep_time=$((2**attempt))
-        print_message "Command failed. Retrying in ${sleep_time}s... (Attempt ${attempt}/${max_attempts})" "WARNING"
-        sleep "$sleep_time"
-        output=$("$@" 2> >(tee /dev/stderr))
-        exit_code=$?
-    done
+    local tmp_err; tmp_err=$(mktemp)
+    output=$("$@" 2> "$tmp_err")
+    exit_code=$?
+    error_output=$(<"$tmp_err")
+    rm -f "$tmp_err"
 
     if [ $exit_code -ne 0 ]; then
-        print_message "Command failed after $max_attempts attempts." "DANGER"
+        echo "Error: $error_output" >&2
     fi
 
-    # Print the final output from the command
     echo "$output"
     return $exit_code
 }
@@ -787,7 +777,7 @@ check_for_updates() {
 
     # 1. Prerequisite and Initial Checks
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
-    if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha265: ]]; then
+    if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
 
@@ -828,15 +818,13 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
 
-    local skopeo_opts=()
     if [ -n "$DOCKER_CONFIG_PATH" ]; then
-        # Use auth file if specified (preferred method)
         local expanded_path; expanded_path=$(eval echo "$DOCKER_CONFIG_PATH")
-        if [ -f "$expanded_path" ]; then
-            skopeo_opts+=("--authfile" "$expanded_path")
-        fi
-    elif [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
-        # Fallback to direct credentials
+        # The var needs to point to the directory, not the file.
+        export DOCKER_CONFIG="${expanded_path%/*}"
+    fi
+    local skopeo_opts=()
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
 
@@ -844,67 +832,67 @@ check_for_updates() {
     get_update_strategy() { yq e ".containers.update_strategies.\"${1}\" // .containers.update_strategies.\"${1%%:*}\" // \"default\"" "$SCRIPT_DIR/config.yml" 2>/dev/null; }
     local strategy; strategy=$(get_update_strategy "$image_name_no_tag")
 
-    if [ "$current_tag" == "latest" ]; then
+    if [[ "$current_tag" =~ ^(latest|stable|rolling)$ ]]; then
         strategy="digest"
     fi
 
     local latest_stable_version=""
     local update_check_failed=false
+    local error_message=""
 
     case "$strategy" in
         "digest")
             local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
-            local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | splitOn("@")[1]) // (.[0].RepoDigests[0]? | splitOn("@")[1])' <<< "$local_inspect")
+            local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
 
             if [ -z "$local_digest" ]; then
-                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'." "WARNING" >&2; update_check_failed=true
+                error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
+                update_check_failed=true
             else
-                local remote_inspect; remote_inspect=$(run_with_retry skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:${current_tag}" 2>&1)
+                local remote_inspect_output; remote_inspect_output=$(skopeo "${skopeo_opts[@]}" inspect "${skopeo_repo_ref}:${current_tag}" 2>&1)
                 if [ $? -ne 0 ]; then
-                    print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'." "DANGER" >&2; update_check_failed=true
+                    error_message="Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'. Details: $remote_inspect_output"
+                    update_check_failed=true
                 else
-                    local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$remote_inspect")
+                    local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$remote_inspect_output")
                     if [ "$remote_digest" != "$local_digest" ]; then
-                        # Digests differ, gather more context for the operator.
-                        local local_created; local_created=$(jq -r '.[0].Created' <<< "$local_inspect")
                         local local_size; local_size=$(jq -r '.[0].Size' <<< "$local_inspect")
-                        local remote_created; remote_created=$(jq -r '.Created' <<< "$remote_inspect")
-                        local remote_size; remote_size=$(jq -r '.Size' <<< "$remote_inspect")
-
-                        # Calculate size delta and make it human-readable
+                        local remote_created; remote_created=$(jq -r '.Created' <<< "$remote_inspect_output")
+                        local remote_size; remote_size=$(jq -r '.Size' <<< "$remote_inspect_output")
                         local size_delta=$((remote_size - local_size))
-                        local human_readable_delta
-                        human_readable_delta=$(awk -v delta="$size_delta" 'BEGIN {
-                            s="B K M G T P E Z Y"; split(s, a);
-                            sig=delta<0?"-":"+"; delta=delta<0?-delta:delta;
-                            while(delta >= 1024 && length(s) > 1) { delta /= 1024; s=substr(s, 3) }
-                            printf "%s%.1f%s", sig, delta, substr(s, 1, 1)
-                        }')
-
-                        # Format dates for readability
+                        local human_readable_delta; human_readable_delta=$(awk -v delta="$size_delta" 'BEGIN { s="B K M G T P E Z Y"; split(s, a); sig=delta<0?"-":"+"; delta=delta<0?-delta:delta; while(delta >= 1024 && length(s) > 1) { delta /= 1024; s=substr(s, 3) } printf "%s%.1f%s", sig, delta, substr(s, 1, 1) }')
                         local remote_date; remote_date=$(date -d "$remote_created" +"%Y-%m-%d %H:%M")
-
                         latest_stable_version="New build found (Created: $remote_date, Size Δ: ${human_readable_delta}B)"
                     fi
                 fi
             fi
             ;;
-
-        "semver" | "major-lock" | *)
-            if [ "$strategy" == "semver" ]; then
-                latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9]+\.[0-9]+\.[0-9]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
-            elif [ "$strategy" == "major-lock" ]; then
-                local major_version="${current_tag%%.*}"; local variant=""
-                if [[ "$current_tag" == *"-"* ]]; then variant="-${current_tag#*-}"; fi
-                latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E "^${major_version}(\.[0-9]+)*${variant}$" | sort -V | tail -n 1)
-            else # Default
-                latest_stable_version=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>/dev/null | jq -r '.Tags[]' | grep -E '^[v]?[0-9\.]+$' | grep -v -- '-.*' | sort -V | tail -n 1)
+        *)
+            local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>&1)
+            if [ $? -ne 0 ]; then
+                error_message="Error listing tags for '${skopeo_repo_ref}'. Details: $skopeo_output"
+                update_check_failed=true
+            else
+                local tag_filter; local sort_cmd
+                sort_cmd=("sort" "-V")
+                case "$strategy" in
+                    "semver") tag_filter='^[v]?[0-9]+\.[0-9]+\.[0-9]+$';;
+                    "major-lock")
+                        local major_version="${current_tag%%.*}"; local variant=""
+                        if [[ "$current_tag" == *"-"* ]]; then variant="-${current_tag#*-}"; fi
+                        tag_filter="^${major_version}(\.[0-9]+)*${variant}$"
+                        ;;
+                    *) tag_filter='^[v]?[0-9\.]+$';;
+                esac
+                latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | grep -v -- '-.*' | "${sort_cmd[@]}" | tail -n 1)
             fi
             ;;
     esac
 
     # Final check and reporting
     if [ "$update_check_failed" = true ]; then
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $error_message" "DANGER" >&2
+        echo "$error_message"
         return 1
     elif [ -z "$latest_stable_version" ]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} No newer version found for '$image_name_no_tag' with strategy '$strategy'." "GOOD" >&2; return 0
@@ -1078,25 +1066,25 @@ run_prune() {
 
 pull_new_image() {
     local container_name_to_update="$1"
+    local update_details="$2"
+
     print_message "Getting image details for '$container_name_to_update'..." "INFO"
 
-    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
-        if ! echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin >/dev/null 2>&1; then
-            print_message "Failed to login to Docker registry. Please check credentials." "DANGER"
+    local current_image_ref; current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
+    local image_to_pull="$current_image_ref" # Default to the current image
+
+    if [[ ! "$update_details" == *"New build found"* ]]; then
+        local image_name_no_tag="${current_image_ref%:*}"
+        local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
+        if [ -n "$new_version" ]; then
+            image_to_pull="${image_name_no_tag}:${new_version}"
         fi
     fi
 
-    local current_image_ref
-    current_image_ref=$(docker inspect -f '{{.Config.Image}}' "$container_name_to_update" 2>/dev/null)
-    if [ -z "$current_image_ref" ]; then
-        print_message "Could not find image for '$container_name_to_update'. Aborting update." "DANGER"
-        return 1
-    fi
-
-    print_message "Pulling new image for: $current_image_ref" "INFO"
-    if docker pull "$current_image_ref"; then
+    print_message "Pulling new image: $image_to_pull" "INFO"
+    if docker pull "$image_to_pull"; then
         print_message "Successfully pulled new image for '$container_name_to_update'." "GOOD"
-        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} You now need to manually recreate the container (e.g., using 'docker compose up -d --force-recreate' or your management tool) to apply the update." "WARNING"
+        print_message "  ${COLOR_YELLOW}ACTION REQUIRED:${COLOR_RESET} You now need to manually recreate the container to apply the update." "WARNING"
     else
         print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
     fi
@@ -1108,30 +1096,28 @@ process_container_update() {
 
     print_message "Starting guided update for '$container_name'..." "INFO"
 
-    # 1. Get container and compose details
     local inspect_json; inspect_json=$(docker inspect "$container_name" 2>/dev/null)
     if [ -z "$inspect_json" ]; then print_message "Failed to inspect container '$container_name'." "DANGER"; return 1; fi
 
-    local working_dir=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""')
-    local service_name=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""')
-    local config_files=$(echo "$inspect_json" | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""')
-    local current_image_ref=$(echo "$inspect_json" | jq -r '.[0].Config.Image')
+    local working_dir; working_dir=$(jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"] // ""' <<< "$inspect_json")
+    local service_name; service_name=$(jq -r '.[0].Config.Labels["com.docker.compose.service"] // ""' <<< "$inspect_json")
+    local config_files; config_files=$(jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"] // ""' <<< "$inspect_json")
+    local current_image_ref; current_image_ref=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
 
     if [ -z "$working_dir" ] || [ -z "$service_name" ]; then
         print_message "Cannot auto-recreate '$container_name'. Not managed by a known docker-compose version." "DANGER"
-        return 1
+        pull_new_image "$container_name" "$update_details" # Fallback to just pulling
+        return
     fi
 
-    # 2. Build the base docker compose command
     local compose_cmd_base=("docker" "compose")
     if [ -n "$config_files" ]; then
         IFS=',' read -r -a files_array <<< "$config_files"
         for file in "${files_array[@]}"; do compose_cmd_base+=("-f" "$file"); done
     fi
 
-    # --- LOGIC FOR LATEST TAG ---
-    if [[ "$current_image_ref" == *:latest ]]; then
-        print_message "Image uses ':latest' tag. Proceeding with standard pull and recreate." "INFO"
+    if [[ "$update_details" == *"New build found"* ]]; then
+        print_message "Image uses a rolling tag. Proceeding with standard pull and recreate." "INFO"
         (
             cd "$working_dir" || exit 1
             if "${compose_cmd_base[@]}" pull "$service_name" < /dev/null && \
@@ -1144,9 +1130,8 @@ process_container_update() {
         return
     fi
 
-    # --- LOGIC FOR PINNED VERSION TAG ---
     local image_name_no_tag="${current_image_ref%:*}"
-    local new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
     if [ -z "$new_version" ]; then
         print_message "Could not determine the new version for '$container_name'. Cannot proceed." "DANGER"
         return 1
@@ -1176,12 +1161,24 @@ process_container_update() {
     local edit_response
     read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
     if [[ "$edit_response" =~ ^[yY]$ ]]; then
-	${VISUAL:-${EDITOR:-nano:-/usr/bin/vi}} "$full_compose_path"
+        # --- CORRECTED EDITOR LOGIC ---
+        local editor_cmd
+        if [ -n "$VISUAL" ]; then
+            editor_cmd="$VISUAL"
+        elif [ -n "$EDITOR" ]; then
+            editor_cmd="$EDITOR"
+        elif command -v nano &>/dev/null; then
+            editor_cmd="nano"
+        else
+            editor_cmd="/usr/bin/vi"
+        fi
+
+        "$editor_cmd" "$full_compose_path"
 
         local apply_response
-	echo
-	read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
-	echo
+        echo
+        read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
+        echo
         if [[ "$apply_response" =~ ^[yY]$ ]]; then
             print_message "Applying changes by recreating the container..." "INFO"
             (
@@ -1264,16 +1261,16 @@ run_interactive_update_mode() {
 	    done
 	fi
 
-	for i in "${!selections_to_process[@]}"; do
-	    local container_to_update="${selections_to_process[$i]}"
-	    local details_for_this_container="${details_to_process[$i]}"
+        for i in "${!selections_to_process[@]}"; do
+            local container_to_update="${selections_to_process[$i]}"
+            local details_for_this_container="${details_to_process[$i]}"
 
-	    if [ "$RECREATE_MODE" = true ]; then
-	        process_container_update "$container_to_update" "$details_for_this_container"
-	    else
-	        pull_new_image "$container_to_update"
-	    fi
-	done
+            if [ "$RECREATE_MODE" = true ]; then
+                process_container_update "$container_to_update" "$details_for_this_container"
+            else
+                pull_new_image "$container_to_update" "$details_for_this_container"
+            fi
+        done
 
     # prune choice
     echo
