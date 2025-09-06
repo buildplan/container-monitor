@@ -1172,7 +1172,7 @@ process_container_update() {
     local edit_response
     read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
     if [[ "$edit_response" =~ ^[yY]$ ]]; then
-        ${VISUAL:-${EDITOR:-nano}} "$full_compose_path"
+	${VISUAL:-${EDITOR:-nano:-/usr/bin/vi}} "$full_compose_path"
 
         local apply_response
 	echo
