@@ -144,9 +144,13 @@ load_configuration() {
         fi
     }
 
+    # Define script defaults here for clarity
+    _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[0-9-]{10}T[0-9:]{8}\.[0-9]+Z\s'
+
     # Set all configuration variables
     set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
     set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
+    set_final_config "LOG_CLEAN_PATTERN"             ".logs.log_clean_pattern"               "$_SCRIPT_DEFAULT_LOG_CLEAN_PATTERN" # <-- ADDED
     set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
     set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
     set_final_config "DISK_SPACE_THRESHOLD"          ".thresholds.disk_space"                "$_SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD"
@@ -912,82 +916,85 @@ check_logs() {
     local container_name="$1"
     local state_json="$2"
 
-    # 1. Get previous state: last timestamp and hash
+    # 1. Get previous state: timestamp and a hash of the last specific log line
     local saved_state_obj; saved_state_obj=$(jq -r --arg name "$container_name" '.logs[$name] // "{}"' <<< "$state_json")
-    local saved_hash; saved_hash=$(jq -r '.last_hash // ""' <<< "$saved_state_obj")
     local last_timestamp; last_timestamp=$(jq -r '.last_timestamp // ""' <<< "$saved_state_obj")
+    local last_line_hash; last_line_hash=$(jq -r '.last_line_hash // ""' <<< "$saved_state_obj")
 
-    # 2. Build docker logs command: use --since if we have a timestamp
-    local docker_logs_cmd=("docker" "logs" "--timestamps")
+    # 2. Build docker logs command.
+    local docker_logs_cmd=("docker" "logs" "--details")
     if [ -n "$last_timestamp" ]; then
         docker_logs_cmd+=("--since" "$last_timestamp")
     else
-        # Fallback for the first run on a container
-        docker_logs_cmd+=("--tail" "$LOG_LINES_TO_CHECK")
+        docker_logs_cmd+=("--tail" "$LOG_LINES_TO_CHECK" "--timestamps")
     fi
     docker_logs_cmd+=("$container_name")
 
-    # 3. Fetch new logs
-    local raw_logs
-    raw_logs=$("${docker_logs_cmd[@]}" 2>&1)
+    # 3. Fetch new logs. The output is a stream of JSON objects.
+    local raw_log_stream; raw_log_stream=$("${docker_logs_cmd[@]}" 2>&1)
     if [ $? -ne 0 ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER" >&2
-        echo "{}" # Return an empty object on failure
-        return 1
+        echo "{}" && return 1
     fi
 
-    # If no new logs, nothing to do. Return the old state.
-    if [ -z "$raw_logs" ]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new log entries to process." "GOOD" >&2
-        echo "$saved_state_obj"
-        return 0
+    if [ -z "$raw_log_stream" ]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new log entries." "GOOD" >&2
+        echo "$saved_state_obj" && return 0
     fi
 
-    # 4. Find, clean, and hash errors from the new log block
-    local error_regex
-    if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
-        error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]}")
-        error_regex="${error_regex%|}"
-    else
-        error_regex='error|panic|fail|fatal'
-    fi
-
-    local current_errors; current_errors=$(echo "$raw_logs" | grep -i -E "$error_regex")
-    local new_hash=""
-
-    if [ -n "$current_errors" ]; then
-        local cleaned_errors
-        cleaned_errors=$(echo "$current_errors" \
-	  | sed -E 's/^[0-9-]{10}T[0-9:]{8}\.[0-9]+Z\s//' \
-	  | sed -E 's/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}//gi') # Example for UUIDs
-        # Add more 'sed' pipes here to remove other variables like UUIDs or request IDs if needed.
-
-        if [ -n "$cleaned_errors" ]; then
-            new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
+    # 4. Handle --since boundary to prevent reprocessing logs with the same timestamp.
+    local logs_to_process="$raw_log_stream"
+    if [ -n "$last_line_hash" ]; then
+        local last_line_index; last_line_index=$(echo "$raw_log_stream" | grep -nF -m 1 "$last_line_hash" | awk -F: '{print $1}')
+        if [[ "$last_line_index" -gt 0 ]]; then
+            logs_to_process=$(echo "$raw_log_stream" | tail -n "+$((last_line_index + 1))")
         fi
     fi
 
-    # 5. Get the timestamp of the last processed log line to use as the next cursor
-    local new_last_timestamp
-    new_last_timestamp=$(echo "$raw_logs" | grep -E '^[0-9-]{10}T' | tail -n 1 | awk '{print $1}')
+    if [ -z "$logs_to_process" ]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new unique log entries since last check." "GOOD" >&2
+        local last_raw_line; last_raw_line=$(echo "$raw_log_stream" | tail -n 1)
+        local new_cursor_hash; new_cursor_hash=$(echo -n "$last_raw_line" | sha256sum | awk '{print $1}')
+        local new_cursor_ts; new_cursor_ts=$(echo "$last_raw_line" | jq -r '.time // ""')
+        jq -n --arg ts "$new_cursor_ts" --arg hash "$new_cursor_hash" '{last_timestamp: $ts, last_line_hash: $hash}'
+        return 0
+    fi
 
-    # 6. Echo the new state object (hash + timestamp) for the main function to save
-    jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
-      '{last_hash: $hash, last_timestamp: $ts}'
+    # 5. Separate stderr from stdout and find errors.
+    # Anything on stderr is considered an error. stdout is checked against patterns.
+    local stderr_errors; stderr_errors=$(echo "$logs_to_process" | jq -r 'select(.stream=="stderr") | .log')
+    local stdout_logs; stdout_logs=$(echo "$logs_to_process" | jq -r 'select(.stream=="stdout") | .log')
 
-    # 7. Determine exit code based on change in error state
+    local error_regex; error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]:-error|panic|fail|fatal}")
+    error_regex="${error_regex%|}"
+
+    local stdout_errors; stdout_errors=$(echo "$stdout_logs" | grep -i -E "$error_regex")
+    local current_errors; current_errors=$(printf "%s\n%s" "$stderr_errors" "$stdout_errors" | sed '/^$/d') # Combine and remove empty lines
+
+    # 6. Clean, hash, and compare errors if any were found.
+    local new_hash=""
+    local saved_hash; saved_hash=$(jq -r '.last_hash // ""' <<< "$saved_state_obj")
+    if [ -n "$current_errors" ]; then
+        # Use the configurable regex from config.yml to clean logs before hashing.
+        local cleaned_errors; cleaned_errors=$(echo "$current_errors" | sed -E "s/$LOG_CLEAN_PATTERN//")
+        new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
+    fi
+
+    # 7. Determine the new cursor (timestamp and hash of the VERY LAST raw log line).
+    local last_raw_line; last_raw_line=$(echo "$raw_log_stream" | tail -n 1)
+    local new_cursor_hash; new_cursor_hash=$(echo -n "$last_raw_line" | sha256sum | awk '{print $1}')
+    local new_cursor_ts; new_cursor_ts=$(echo "$last_raw_line" | jq -r '.time // ""')
+
+    # 8. Echo the new state object and set exit code for alerting.
+    jq -n --arg hash "$new_hash" --arg ts "$new_cursor_ts" --arg lhash "$new_cursor_hash" \
+      '{last_hash: $hash, last_timestamp: $ts, last_line_hash: $lhash}'
+
     if [[ -n "$new_hash" && "$new_hash" != "$saved_hash" ]]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New error patterns found in logs." "WARNING" >&2
-        return 1 # New, unique errors found
-    elif [[ -z "$new_hash" && -n "$saved_hash" ]]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Previously logged errors have been resolved." "GOOD" >&2
-        return 0
-    elif [ -n "$new_hash" ]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No *new* error patterns found (persistent errors may exist)." "GOOD" >&2
-        return 0
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New error patterns found." "WARNING" >&2
+        return 1 # New errors
     else
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no errors found." "GOOD" >&2
-        return 0
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Processed new logs, no new error patterns." "GOOD" >&2
+        return 0 # No new errors
     fi
 }
 
