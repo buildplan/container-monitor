@@ -805,11 +805,11 @@ check_logs() {
     docker_logs_cmd+=("$container_name")
     local raw_logs cli_stderr
     local tmp_err; tmp_err=$(mktemp)
-    raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err")
+    raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err"); local docker_exit_code=$?
     cli_stderr=$(<"$tmp_err")
     rm -f "$tmp_err"
     if [ -n "$cli_stderr" ]; then
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        if [ $docker_exit_code -ne 0 ]; then
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${PIPESTATUS[0]}. See logs for details." "DANGER" >&2
         else
         :
