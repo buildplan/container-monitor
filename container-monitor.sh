@@ -1389,8 +1389,8 @@ perform_checks_for_container() {
     # If not, it was a live check and the result should be cached for next time.
     if ! echo "$update_output" | grep -q "(cached)"; then
         local cache_key; cache_key=$(echo "$current_image_ref_for_update" | sed 's/[/:]/_/g')
-	jq -n --arg key "$cache_key" --arg msg "$update_details" --argjson code "$update_exit_code" \
-	  '{key: $key, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
+        jq -n --arg key "$cache_key" --arg img_ref "$current_image_ref_for_update" --arg msg "$update_details" --argjson code "$update_exit_code" \
+          '{key: $key, image_ref: $img_ref, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
 
     local new_log_state_json
@@ -1589,10 +1589,9 @@ main() {
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
 
-        # --- Stale lock file cleanup with PID check ---
+        # Stale lock file cleanup with PID check
         if [ -f "$LOCK_FILE" ]; then
             local locked_pid; locked_pid=$(cat "$LOCK_FILE")
-            # Check if the PID in the lock file is still running
             if ! ps -p "$locked_pid" > /dev/null; then
                 print_message "Removing stale lock file for non-existent PID $locked_pid." "WARNING"
                 rm -f "$LOCK_FILE"
@@ -1628,7 +1627,7 @@ main() {
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
                NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS
 
-        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
+        if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
             mkfifo progress_pipe
@@ -1695,24 +1694,21 @@ main() {
             IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
-                local filtered_issues_array=() # Use an array to store filtered issues
+                local filtered_issues_array=()
 
-                # Use the pipe delimiter to correctly split the issues
                 IFS='|' read -r -a issue_array <<< "$issues"
 
                 for issue in "${issue_array[@]}"; do
                     for notify_issue in "${notify_on_array[@]}"; do
-                        # Handle Updates specially since it contains additional details
                         if [[ "${notify_issue,,}" == "updates" && "$issue" == Update* ]] || [[ "${issue,,}" == "${notify_issue,,}" ]]; then
-                            filtered_issues_array+=("$issue") # Add the full issue to the array
+                            filtered_issues_array+=("$issue")
                             notify_issues=true
-                            break # Found a match, move to the next issue
+                            break
                         fi
                     done
                 done
 
                 if [ ${#filtered_issues_array[@]} -gt 0 ]; then
-                    # Join the array elements with a comma for the final message
                     local filtered_issues_str
                     filtered_issues_str=$(IFS=, ; echo "${filtered_issues_array[*]}")
                     summary_message+="\n[$container]\n- $filtered_issues_str\n"
@@ -1726,7 +1722,7 @@ main() {
                     send_notification "$summary_message" "$notification_title"
                 fi
             fi
-    fi
+        fi
 
         # --- UPDATE AND SAVE STATE ---
         # Re-acquire lock to safely write the new state
@@ -1746,6 +1742,10 @@ main() {
         fi
 
         local new_state_json="$current_state_json"
+
+        # --- Run-time cache to de-duplicate update checks ---
+        declare -A RUNTIME_UPDATE_CACHE
+
         # Update restart counts
         for restart_file in "$results_dir"/*.restarts; do
             if [ -f "$restart_file" ]; then
@@ -1758,29 +1758,36 @@ main() {
         for cache_update_file in "$results_dir"/*.update_cache; do
             if [ -f "$cache_update_file" ]; then
                 local cache_data; cache_data=$(cat "$cache_update_file")
-                local key; key=$(jq -r '.key' <<< "$cache_data")
-                local data; data=$(jq -r '.data' <<< "$cache_data")
-                new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
+                local image_ref; image_ref=$(jq -r '.image_ref' <<< "$cache_data")
+
+                # Only process this update if we haven't already cached it this run
+                if [[ -z "${RUNTIME_UPDATE_CACHE[$image_ref]}" ]]; then
+                    local key; key=$(jq -r '.key' <<< "$cache_data")
+                    local data; data=$(jq -r '.data' <<< "$cache_data")
+                    new_state_json=$(jq --arg key "$key" --argjson data "$data" '.updates[$key] = $data' <<< "$new_state_json")
+
+                    # Mark this image_ref as processed for this run
+                    RUNTIME_UPDATE_CACHE["$image_ref"]=1
+                fi
             fi
         done
 
-    # Update log state (timestamp and hash)
-    for log_state_file in "$results_dir"/*.log_state; do
-        if [ -f "$log_state_file" ]; then
-            local container_name; container_name=$(basename "$log_state_file" .log_state)
-            local log_state_obj; log_state_obj=$(cat "$log_state_file")
+        # Update log state (timestamp and hash)
+        for log_state_file in "$results_dir"/*.log_state; do
+            if [ -f "$log_state_file" ]; then
+                local container_name; container_name=$(basename "$log_state_file" .log_state)
+                local log_state_obj; log_state_obj=$(cat "$log_state_file")
 
-            if jq -e '.last_timestamp | test(".+")' <<< "$log_state_obj" >/dev/null; then
-                new_state_json=$(jq --arg name "$container_name" --argjson val "$log_state_obj" '.logs[$name] = $val' <<< "$new_state_json")
-            else
-                new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name]?)' <<< "$new_state_json")
+                if jq -e '.last_timestamp | test(".+")' <<< "$log_state_obj" >/dev/null; then
+                    new_state_json=$(jq --arg name "$container_name" --argjson val "$log_state_obj" '.logs[$name] = $val' <<< "$new_state_json")
+                else
+                    new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name]?)' <<< "$new_state_json")
+                fi
             fi
-        fi
-    done
+        done
 
-        # State file cleanup
+        # State file cleanup logic
         mapfile -t all_system_containers < <(docker ps -a --format '{{.Names}}')
-        # Create a JSON array of these names for jq
         local all_system_containers_json; all_system_containers_json=$(printf '%s\n' "${all_system_containers[@]}" | jq -R . | jq -s .)
 
         new_state_json=$(jq --argjson valid_names "$all_system_containers_json" '
