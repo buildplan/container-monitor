@@ -16,7 +16,7 @@ logs:
     - "Traceback"
   # Optional regex to strip variable data from logs before hashing.
   # This default handles Docker's --timestamps format. You can adapt it for other log drivers.
-  log_clean_pattern: '^[^ ]+\s'
+  log_clean_pattern: '^[^ ]+[[:space:]]+'
 
 # Credentials for private registries.
 # It is safer to provide these using environment variables:

@@ -146,7 +146,7 @@ load_configuration() {
 
     # Define script defaults here for clarity
 
-    _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[^ ]+\s'
+    _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[^ ]+[[:space:]]+'
 
     # Set all configuration variables
     set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
@@ -931,9 +931,14 @@ check_logs() {
     fi
     docker_logs_cmd+=("$container_name")
 
+
     # 3. Fetch logs, treating output as plain text and separating the command's stderr.
     local raw_logs cli_stderr
-    raw_logs=$("${docker_logs_cmd[@]}" 2> >(cli_stderr=$(cat); declare -p cli_stderr >&2))
+    local tmp_err; tmp_err=$(mktemp)
+    raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err")
+    cli_stderr=$(<"$tmp_err")
+    rm -f "$tmp_err"
+
     if [ -n "$cli_stderr" ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command returned an error for '$container_name': $cli_stderr" "DANGER" >&2
     fi
