@@ -143,27 +143,40 @@ containers:
 
 You can override any setting from the YAML file by exporting an environment variable. The variable name is the uppercase version of the YAML path.
 
+#### General & Logging
 | YAML Path | ENV Variable | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `.general.log_lines_to_check`|`LOG_LINES_TO_CHECK`| `20` | Number of recent log lines to scan for errors. |
-| `.general.log_file`|`LOG_FILE`| `"container-monitor.log"` | Path to the script's output log file. |
-| `.general.update_check_cache_hours`|`UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results to avoid frequent checks. |
-| `.general.lock_timeout_seconds`|`LOCK_TIMEOUT_SECONDS`| `10` | Time to wait for a lock file before exiting if another instance is running. |
-| `.logs.log_clean_pattern`|`LOG_CLEAN_PATTERN`| `'^[^ ]+[[:space:]]+'` | Regex used to strip variable data (like timestamps) from logs before hashing. |
-| `.thresholds.cpu_warning` |`CPU_WARNING_THRESHOLD`| `80` | CPU usage percentage that triggers a resource warning. |
-| `.thresholds.memory_warning`|`MEMORY_WARNING_THRESHOLD`| `80` | Memory usage percentage that triggers a resource warning. |
-| `.thresholds.disk_space`|`DISK_SPACE_THRESHOLD`| `80` | Disk usage percentage for a container mount that triggers a warning. |
-| `.thresholds.network_error`|`NETWORK_ERROR_THRESHOLD`| `10` | Number of network errors/drops that triggers a warning. |
-| `.host_system.disk_check_filesystem`|`HOST_DISK_CHECK_FILESYSTEM`| `/` | Host filesystem to monitor for disk space usage. |
-| N/A |`CONTAINER_NAMES`| (empty) | List of specific containers to monitor. |
-| `.notifications.channel` |`NOTIFICATION_CHANNEL`| `"none"` | Set to `"discord"`, `"ntfy"`, or `"none"`. |
-| `.notifications.notify_on` |`NOTIFY_ON`| All issues | Comma-separated list of issue types (`Updates`, `Logs`, etc.) to send alerts for. |
-| `.notifications.discord.webhook_url`|`DISCORD_WEBHOOK_URL`| (empty) | The webhook URL for Discord notifications. |
-| `.notifications.ntfy.server_url`|`NTFY_SERVER_URL`| `"https://ntfy.sh"` | The server URL for ntfy notifications. |
-| `.notifications.ntfy.topic`|`NTFY_TOPIC`| (empty) | The topic to publish ntfy notifications to. |
-| `.auth.docker_username` |`DOCKER_USERNAME`| (empty) | Username for authenticating with a private Docker registry. |
-| `.auth.docker_password` |`DOCKER_PASSWORD`| (empty) | Password for authenticating with a private Docker registry. |
-| `.auth.docker_config_path` |`DOCKER_CONFIG_PATH`| `~/.docker/config.json` | Path to the Docker `config.json` file for registry authentication. |
+| :--- | :---: | :---: | :--- |
+| `general.log_lines_to_check`| `LOG_LINES_TO_CHECK`| `20` | Number of recent log lines to scan for errors. |
+| `general.log_file`| `LOG_FILE`| `container-monitor.log` | Path to the script's output log file. |
+| `general.update_check_cache_hours`| `UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results. |
+| `general.lock_timeout_seconds`| `LOCK_TIMEOUT_SECONDS`| `10` | Seconds to wait for a lock file before exiting. |
+| `logs.log_clean_pattern`| `LOG_CLEAN_PATTERN`| `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
+
+#### Thresholds & Monitoring
+| YAML Path | ENV Variable | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `thresholds.cpu_warning` | `CPU_WARNING_THRESHOLD`| `80` | CPU usage % that triggers a warning. |
+| `thresholds.memory_warning`| `MEMORY_WARNING_THRESHOLD`| `80` | Memory usage % that triggers a warning. |
+| `thresholds.disk_space`| `DISK_SPACE_THRESHOLD`| `80` | Disk usage % for a container mount that triggers a warning. |
+| `thresholds.network_error`| `NETWORK_ERROR_THRESHOLD`| `10` | Network error/drop count that triggers a warning. |
+| `host_system.disk_check_filesystem`| `HOST_DISK_CHECK_FILESYSTEM`| `/` | The host filesystem to monitor for disk space. |
+| N/A | `CONTAINER_NAMES`| `(empty)` | Comma-separated list of containers to monitor. |
+
+#### Notifications
+| YAML Path | ENV Variable | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `notifications.channel` | `NOTIFICATION_CHANNEL`| `none` | Notification channel: `discord`, `ntfy`, or `none`. |
+| `notifications.notify_on` | `NOTIFY_ON`| All issues | Comma-separated list of issue types to send alerts for. |
+| `notifications.discord.webhook_url`| `DISCORD_WEBHOOK_URL`| `(empty)` | The webhook URL for Discord notifications. |
+| `notifications.ntfy.server_url`| `NTFY_SERVER_URL`| `https://ntfy.sh` | The server URL for ntfy notifications. |
+| `notifications.ntfy.topic`| `NTFY_TOPIC`| `(empty)` | The topic to publish ntfy notifications to. |
+
+#### Authentication
+| YAML Path | ENV Variable | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `auth.docker_username` | `DOCKER_USERNAME`| `(empty)` | Username for a private Docker registry. |
+| `auth.docker_password` | `DOCKER_PASSWORD`| `(empty)` | Password for a private Docker registry. |
+| `auth.docker_config_path` | `DOCKER_CONFIG_PATH`| `~/.docker/config.json` | Path to Docker's `config.json` file for authentication. |
 
 **Tip**: To find the names of your running containers, use `docker ps --format '{{.Names}}'`. You can add these names to the `monitor_defaults` list in `config.yml`.
 
