@@ -957,7 +957,9 @@ check_logs() {
 
     if [ -n "$current_errors" ]; then
         local cleaned_errors
-        cleaned_errors=$(echo "$current_errors" | sed -E 's/^[0-9-]{10}T[0-9:]{8}\.[0-9]+Z\s//') # Removes docker's timestamp
+        cleaned_errors=$(echo "$current_errors" \
+	  | sed -E 's/^[0-9-]{10}T[0-9:]{8}\.[0-9]+Z\s//' \
+	  | sed -E 's/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}//gi') # Example for UUIDs
         # Add more 'sed' pipes here to remove other variables like UUIDs or request IDs if needed.
 
         if [ -n "$cleaned_errors" ]; then
@@ -967,7 +969,7 @@ check_logs() {
 
     # 5. Get the timestamp of the last processed log line to use as the next cursor
     local new_last_timestamp
-    new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
+    new_last_timestamp=$(echo "$raw_logs" | grep -E '^[0-9-]{10}T' | tail -n 1 | awk '{print $1}')
 
     # 6. Echo the new state object (hash + timestamp) for the main function to save
     jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
