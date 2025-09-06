@@ -145,7 +145,8 @@ load_configuration() {
     }
 
     # Define script defaults here for clarity
-    _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[0-9-]{10}T[0-9:]{8}\.[0-9]+Z\s'
+
+    _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[^ ]+\s'
 
     # Set all configuration variables
     set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
@@ -916,78 +917,65 @@ check_logs() {
     local container_name="$1"
     local state_json="$2"
 
-    # 1. Get previous state: timestamp and a hash of the last specific log line
+    # 1. Get previous state: last timestamp and last error block hash.
     local saved_state_obj; saved_state_obj=$(jq -r --arg name "$container_name" '.logs[$name] // "{}"' <<< "$state_json")
     local last_timestamp; last_timestamp=$(jq -r '.last_timestamp // ""' <<< "$saved_state_obj")
-    local last_line_hash; last_line_hash=$(jq -r '.last_line_hash // ""' <<< "$saved_state_obj")
+    local saved_hash; saved_hash=$(jq -r '.last_hash // ""' <<< "$saved_state_obj")
 
-    # 2. Build docker logs command.
-    local docker_logs_cmd=("docker" "logs" "--details")
+    # 2. Build the docker logs command. ALWAYS include --timestamps.
+    local docker_logs_cmd=("docker" "logs" "--timestamps")
     if [ -n "$last_timestamp" ]; then
         docker_logs_cmd+=("--since" "$last_timestamp")
     else
-        docker_logs_cmd+=("--tail" "$LOG_LINES_TO_CHECK" "--timestamps")
+        docker_logs_cmd+=("--tail" "$LOG_LINES_TO_CHECK")
     fi
     docker_logs_cmd+=("$container_name")
 
-    # 3. Fetch new logs. The output is a stream of JSON objects.
-    local raw_log_stream; raw_log_stream=$("${docker_logs_cmd[@]}" 2>&1)
-    if [ $? -ne 0 ]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER" >&2
-        echo "{}" && return 1
+    # 3. Fetch logs, treating output as plain text and separating the command's stderr.
+    local raw_logs cli_stderr
+    raw_logs=$("${docker_logs_cmd[@]}" 2> >(cli_stderr=$(cat); declare -p cli_stderr >&2))
+    if [ -n "$cli_stderr" ]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command returned an error for '$container_name': $cli_stderr" "DANGER" >&2
     fi
 
-    if [ -z "$raw_log_stream" ]; then
+    if [ -z "$raw_logs" ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new log entries." "GOOD" >&2
         echo "$saved_state_obj" && return 0
     fi
 
-    # 4. Handle --since boundary to prevent reprocessing logs with the same timestamp.
-    local logs_to_process="$raw_log_stream"
-    if [ -n "$last_line_hash" ]; then
-        local last_line_index; last_line_index=$(echo "$raw_log_stream" | grep -nF -m 1 "$last_line_hash" | awk -F: '{print $1}')
-        if [[ "$last_line_index" -gt 0 ]]; then
-            logs_to_process=$(echo "$raw_log_stream" | tail -n "+$((last_line_index + 1))")
-        fi
+    # 4. Fix boundary de-duplication: drop the first line if its timestamp matches the last cursor.
+    local logs_to_process="$raw_logs"
+    local first_line_ts; first_line_ts=$(echo "$raw_logs" | head -n 1 | awk '{print $1}')
+    if [[ -n "$last_timestamp" && "$first_line_ts" == "$last_timestamp" ]]; then
+        logs_to_process=$(echo "$raw_logs" | tail -n +2)
     fi
 
     if [ -z "$logs_to_process" ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new unique log entries since last check." "GOOD" >&2
-        local last_raw_line; last_raw_line=$(echo "$raw_log_stream" | tail -n 1)
-        local new_cursor_hash; new_cursor_hash=$(echo -n "$last_raw_line" | sha256sum | awk '{print $1}')
-        local new_cursor_ts; new_cursor_ts=$(echo "$last_raw_line" | jq -r '.time // ""')
-        jq -n --arg ts "$new_cursor_ts" --arg hash "$new_cursor_hash" '{last_timestamp: $ts, last_line_hash: $hash}'
-        return 0
+        echo "$saved_state_obj" && return 0
     fi
 
-    # 5. Separate stderr from stdout and find errors.
-    # Anything on stderr is considered an error. stdout is checked against patterns.
-    local stderr_errors; stderr_errors=$(echo "$logs_to_process" | jq -r 'select(.stream=="stderr") | .log')
-    local stdout_logs; stdout_logs=$(echo "$logs_to_process" | jq -r 'select(.stream=="stdout") | .log')
-
+    # 5. Find errors in the processed text using grep.
     local error_regex; error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]:-error|panic|fail|fatal}")
     error_regex="${error_regex%|}"
-
-    local stdout_errors; stdout_errors=$(echo "$stdout_logs" | grep -i -E "$error_regex")
-    local current_errors; current_errors=$(printf "%s\n%s" "$stderr_errors" "$stdout_errors" | sed '/^$/d') # Combine and remove empty lines
+    local current_errors; current_errors=$(echo "$logs_to_process" | grep -i -E "$error_regex")
 
     # 6. Clean, hash, and compare errors if any were found.
     local new_hash=""
-    local saved_hash; saved_hash=$(jq -r '.last_hash // ""' <<< "$saved_state_obj")
     if [ -n "$current_errors" ]; then
-        # Use the configurable regex from config.yml to clean logs before hashing.
         local cleaned_errors; cleaned_errors=$(echo "$current_errors" | sed -E "s/$LOG_CLEAN_PATTERN//")
         new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
     fi
 
-    # 7. Determine the new cursor (timestamp and hash of the VERY LAST raw log line).
-    local last_raw_line; last_raw_line=$(echo "$raw_log_stream" | tail -n 1)
-    local new_cursor_hash; new_cursor_hash=$(echo -n "$last_raw_line" | sha256sum | awk '{print $1}')
-    local new_cursor_ts; new_cursor_ts=$(echo "$last_raw_line" | jq -r '.time // ""')
+    # 7. Determine the new cursor timestamp from the VERY LAST raw log line.
+    local new_last_timestamp; new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
+    if ! [[ "$new_last_timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+        new_last_timestamp="$last_timestamp"
+    fi
 
-    # 8. Echo the new state object and set exit code for alerting.
-    jq -n --arg hash "$new_hash" --arg ts "$new_cursor_ts" --arg lhash "$new_cursor_hash" \
-      '{last_hash: $hash, last_timestamp: $ts, last_line_hash: $lhash}'
+    # 8. Echo the new, simplified state object and set the exit code for alerting.
+    jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
+      '{last_hash: $hash, last_timestamp: $ts}'
 
     if [[ -n "$new_hash" && "$new_hash" != "$saved_hash" ]]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New error patterns found." "WARNING" >&2
