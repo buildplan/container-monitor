@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# --- v0.44 ---
+# --- v0.45 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -48,8 +48,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.44"
-VERSION_DATE="2025-08-18"
+VERSION="v0.45"
+VERSION_DATE="2025-09-06"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -912,15 +912,38 @@ check_logs() {
     local container_name="$1"
     local state_json="$2"
 
-    # First, get the logs and immediately check if the command was successful
+    # 1. Get previous state: last timestamp and hash
+    local saved_state_obj; saved_state_obj=$(jq -r --arg name "$container_name" '.logs[$name] // "{}"' <<< "$state_json")
+    local saved_hash; saved_hash=$(jq -r '.last_hash // ""' <<< "$saved_state_obj")
+    local last_timestamp; last_timestamp=$(jq -r '.last_timestamp // ""' <<< "$saved_state_obj")
+
+    # 2. Build docker logs command: use --since if we have a timestamp
+    local docker_logs_cmd=("docker" "logs" "--timestamps")
+    if [ -n "$last_timestamp" ]; then
+        docker_logs_cmd+=("--since" "$last_timestamp")
+    else
+        # Fallback for the first run on a container
+        docker_logs_cmd+=("--tail" "$LOG_LINES_TO_CHECK")
+    fi
+    docker_logs_cmd+=("$container_name")
+
+    # 3. Fetch new logs
     local raw_logs
-    raw_logs=$(docker logs --tail "$LOG_LINES_TO_CHECK" "$container_name" 2>&1)
+    raw_logs=$("${docker_logs_cmd[@]}" 2>&1)
     if [ $? -ne 0 ]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Error retrieving logs for '$container_name'." "DANGER" >&2
-        echo "" # Return an empty hash
-        return 1 # Return an error code to trigger a "Logs" issue
+        echo "{}" # Return an empty object on failure
+        return 1
     fi
 
+    # If no new logs, nothing to do. Return the old state.
+    if [ -z "$raw_logs" ]; then
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new log entries to process." "GOOD" >&2
+        echo "$saved_state_obj"
+        return 0
+    fi
+
+    # 4. Find, clean, and hash errors from the new log block
     local error_regex
     if [ ${#LOG_ERROR_PATTERNS[@]} -gt 0 ]; then
         error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]}")
@@ -929,35 +952,39 @@ check_logs() {
         error_regex='error|panic|fail|fatal'
     fi
 
-    # Now, grep for errors within the logs we successfully retrieved
-    local current_errors
-    current_errors=$(echo "$raw_logs" | grep -i -E "$error_regex")
-
+    local current_errors; current_errors=$(echo "$raw_logs" | grep -i -E "$error_regex")
     local new_hash=""
+
     if [ -n "$current_errors" ]; then
-        # If errors are found, generate a hash of them
-        new_hash=$(echo "$current_errors" | sort | sha256sum | awk '{print $1}')
+        local cleaned_errors
+        cleaned_errors=$(echo "$current_errors" | sed -E 's/^[0-9-]{10}T[0-9:]{8}\.[0-9]+Z\s//') # Removes docker's timestamp
+        # Add more 'sed' pipes here to remove other variables like UUIDs or request IDs if needed.
+
+        if [ -n "$cleaned_errors" ]; then
+            new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
+        fi
     fi
 
-    # Get the previously saved error hash from the state file
-    local saved_hash
-    saved_hash=$(jq -r --arg name "$container_name" '.logs[$name] // ""' <<< "$state_json")
+    # 5. Get the timestamp of the last processed log line to use as the next cursor
+    local new_last_timestamp
+    new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
 
-    # Echo the new hash so the calling function can save it to the state
-    echo "$new_hash"
+    # 6. Echo the new state object (hash + timestamp) for the main function to save
+    jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
+      '{last_hash: $hash, last_timestamp: $ts}'
 
-    # Determine the exit code based on a change in the error state
+    # 7. Determine exit code based on change in error state
     if [[ -n "$new_hash" && "$new_hash" != "$saved_hash" ]]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New errors/warnings found in logs." "WARNING" >&2
-        return 1
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} New error patterns found in logs." "WARNING" >&2
+        return 1 # New, unique errors found
     elif [[ -z "$new_hash" && -n "$saved_hash" ]]; then
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Previously logged errors have been resolved." "GOOD" >&2
         return 0
     elif [ -n "$new_hash" ]; then
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No *new* errors found (persistent errors may exist)." "GOOD" >&2
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No *new* error patterns found (persistent errors may exist)." "GOOD" >&2
         return 0
     else
-        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no obvious widespread errors found." "GOOD" >&2
+        print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Logs checked, no errors found." "GOOD" >&2
         return 0
     fi
 }
@@ -1348,12 +1375,12 @@ perform_checks_for_container() {
 	  '{key: $key, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
 
-    local new_log_hash
-    new_log_hash=$(check_logs "$container_actual_name" "$state_json_string")
+    local new_log_state_json
+    new_log_state_json=$(check_logs "$container_actual_name" "$state_json_string")
     if [ $? -ne 0 ]; then
         issue_tags+=("Logs")
     fi
-    echo "$new_log_hash" > "$results_dir/$container_actual_name.log_hash"
+    echo "$new_log_state_json" > "$results_dir/$container_actual_name.log_state"
 
     if [ ${#issue_tags[@]} -gt 0 ]; then
         (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
@@ -1715,20 +1742,19 @@ main() {
             fi
         done
 
-        # Update log error hashes
-        for log_hash_file in "$results_dir"/*.log_hash; do
-            if [ -f "$log_hash_file" ]; then
-                local container_name; container_name=$(basename "$log_hash_file" .log_hash)
-                local hash; hash=$(cat "$log_hash_file")
-                if [ -n "$hash" ]; then
-                    # If a new hash exists, add/update it in the state file
-                    new_state_json=$(jq --arg name "$container_name" --arg val "$hash" '.logs[$name] = $val' <<< "$new_state_json")
-                else
-                    # If the hash is empty, the error was resolved, so remove the key
-                    new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name])' <<< "$new_state_json")
-                fi
-            fi
-        done
+	# Update log state (timestamp and hash)
+	for log_state_file in "$results_dir"/*.log_state; do
+	    if [ -f "$log_state_file" ]; then
+	        local container_name; container_name=$(basename "$log_state_file" .log_state)
+	        local log_state_obj; log_state_obj=$(cat "$log_state_file")
+
+	        if jq -e '.last_timestamp | test(".+")' <<< "$log_state_obj" >/dev/null; then
+	            new_state_json=$(jq --arg name "$container_name" --argjson val "$log_state_obj" '.logs[$name] = $val' <<< "$new_state_json")
+	        else
+	            new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name]?)' <<< "$new_state_json")
+	        fi
+	    fi
+	done
 
         # Write the new state and release the lock
         echo "$new_state_json" > "$STATE_FILE"
