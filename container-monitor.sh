@@ -1406,6 +1406,8 @@ perform_checks_for_container() {
 }
 
 # --- Main Execution ---
+# container-monitor.sh
+
 main() {
     # Help, show script commands
     if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -1589,10 +1591,14 @@ main() {
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
 
-        # Stale lock file cleanup: If lock file is older than 60 minutes, remove it.
-        if [ -f "$LOCK_FILE" ] && [[ $(find "$LOCK_FILE" -mmin +60) ]]; then
-            print_message "Removing stale lock file older than 60 minutes." "WARNING"
-            rm -f "$LOCK_FILE"
+        # --- NEW: Stale lock file cleanup with PID check ---
+        if [ -f "$LOCK_FILE" ]; then
+            local locked_pid; locked_pid=$(cat "$LOCK_FILE")
+            # Check if the PID in the lock file is still running
+            if ! ps -p "$locked_pid" > /dev/null; then
+                print_message "Removing stale lock file for non-existent PID $locked_pid." "WARNING"
+                rm -f "$LOCK_FILE"
+            fi
         fi
 
         # Acquire lock, waiting up to LOCK_TIMEOUT_SECONDS
@@ -1637,7 +1643,7 @@ main() {
                     processed=$((processed + 1))
                     local percent=$((processed * 100 / total))
                     local bar_len=40
-                    local bar_filled_len=$((processed * bar_len / total))    
+                    local bar_filled_len=$((processed * bar_len / total))
                     local current_time; current_time=$(date +%s)
                     local elapsed=$((current_time - start_time))
                     local elapsed_str; elapsed_str=$(printf "%02d:%02d" $((elapsed/60)) $((elapsed%60)))
@@ -1722,7 +1728,7 @@ main() {
                     send_notification "$summary_message" "$notification_title"
                 fi
             fi
-	fi
+    fi
 
         # --- UPDATE AND SAVE STATE ---
         # Re-acquire lock to safely write the new state
@@ -1760,19 +1766,29 @@ main() {
             fi
         done
 
-	# Update log state (timestamp and hash)
-	for log_state_file in "$results_dir"/*.log_state; do
-	    if [ -f "$log_state_file" ]; then
-	        local container_name; container_name=$(basename "$log_state_file" .log_state)
-	        local log_state_obj; log_state_obj=$(cat "$log_state_file")
+    # Update log state (timestamp and hash)
+    for log_state_file in "$results_dir"/*.log_state; do
+        if [ -f "$log_state_file" ]; then
+            local container_name; container_name=$(basename "$log_state_file" .log_state)
+            local log_state_obj; log_state_obj=$(cat "$log_state_file")
 
-	        if jq -e '.last_timestamp | test(".+")' <<< "$log_state_obj" >/dev/null; then
-	            new_state_json=$(jq --arg name "$container_name" --argjson val "$log_state_obj" '.logs[$name] = $val' <<< "$new_state_json")
-	        else
-	            new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name]?)' <<< "$new_state_json")
-	        fi
-	    fi
-	done
+            if jq -e '.last_timestamp | test(".+")' <<< "$log_state_obj" >/dev/null; then
+                new_state_json=$(jq --arg name "$container_name" --argjson val "$log_state_obj" '.logs[$name] = $val' <<< "$new_state_json")
+            else
+                new_state_json=$(jq --arg name "$container_name" 'del(.logs[$name]?)' <<< "$new_state_json")
+            fi
+        fi
+    done
+
+        # State file cleanup
+        mapfile -t all_system_containers < <(docker ps -a --format '{{.Names}}')
+        # Create a JSON array of these names for jq
+        local all_system_containers_json; all_system_containers_json=$(printf '%s\n' "${all_system_containers[@]}" | jq -R . | jq -s .)
+
+        new_state_json=$(jq --argjson valid_names "$all_system_containers_json" '
+            .restarts = (.restarts | with_entries(select(.key as $k | $valid_names | index($k)))) |
+            .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
+        ' <<< "$new_state_json")
 
         # Write the new state and release the lock
         echo "$new_state_json" > "$STATE_FILE"
