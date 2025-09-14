@@ -838,7 +838,9 @@ check_logs() {
         new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
     fi
     local new_last_timestamp; new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
-    if ! [[ "$new_last_timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+    if [ -z "$new_last_timestamp" ]; then
+        new_last_timestamp="$last_timestamp"
+    elif ! [[ "$new_last_timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
         new_last_timestamp="$last_timestamp"
     fi
     jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
