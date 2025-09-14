@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
+set -uo pipefail
 
-# --- v0.45 ---
+# --- v0.46 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -29,6 +30,7 @@
 #   ./container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./container-monitor.sh --pull                        - Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                      - Choose which containers to update and recreate (pull and recreate container)
+#   ./container-monitor.sh --force-update                - Force update check in non-interactive mode (e.g., cron)
 #   ./container-monitor.sh --exclude=c1,c2               - Run on all containers, excluding specific ones.
 #   ./container-monitor.sh summary                       - Run all checks silently and show only the final summary.
 #   ./container-monitor.sh summary <c1> <c2> ...         - Summary mode for specific containers.
@@ -48,8 +50,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.45"
-VERSION_DATE="2025-09-06"
+VERSION="v0.46"
+VERSION_DATE="2025-09-14"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -79,7 +81,7 @@ LOCK_FILE="$SCRIPT_DIR/.monitor_state.lock"
 # --- Script Default Configuration Values ---
 _SCRIPT_DEFAULT_LOG_LINES_TO_CHECK=20
 _SCRIPT_DEFAULT_CHECK_FREQUENCY_MINUTES=360
-_SCRIPT_DEFAULT_LOG_FILE="$SCRIPT_DIR/docker-monitor.log"
+_SCRIPT_DEFAULT_LOG_FILE="$SCRIPT_DIR/container-monitor.log"
 _SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD=80
 _SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD=80
 _SCRIPT_DEFAULT_DISK_SPACE_THRESHOLD=80
@@ -106,6 +108,7 @@ DISCORD_WEBHOOK_URL="$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL"
 NTFY_SERVER_URL="$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
 NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
+CONTAINER_NAMES=""
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 # --- Functions ---
@@ -307,38 +310,43 @@ check_and_install_dependencies() {
         fi
     done
     if [ ${#missing_pkgs[@]} -gt 0 ]; then
-        print_message "The following required packages can be installed via your package manager: ${missing_pkgs[*]}" "WARNING"
-        if [ -n "$pkg_manager" ]; then
-            read -rp "Would you like to attempt to install them now? (y/n): " response
-            if [[ "$response" =~ ^[yY]$ ]]; then
-                print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
-                local install_cmd
-                if [ "$pkg_manager" == "apt" ]; then
-                    install_cmd="sudo apt-get update && sudo apt-get install -y"
+        print_message "The following required packages are missing: ${missing_pkgs[*]}" "DANGER"
+        if [ -t 0 ]; then
+            if [ -n "$pkg_manager" ]; then
+                read -rp "Would you like to attempt to install them now? (y/n): " response
+                if [[ "$response" =~ ^[yY]$ ]]; then
+                    print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
+                    local install_cmd
+                    if [ "$pkg_manager" == "apt" ]; then
+                        install_cmd="sudo apt-get update && sudo apt-get install -y"
+                    else
+                        install_cmd="sudo $pkg_manager install -y"
+                    fi
+                    if sudo ${install_cmd} "${missing_pkgs[@]}"; then
+                        print_message "Package manager dependencies installed successfully." "GOOD"
+                    else
+                        print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                        manual_install_needed=true
+                    fi
                 else
-                    install_cmd="sudo $pkg_manager install -y"
-                fi
-                if eval "$install_cmd ${missing_pkgs[*]}"; then
-                    print_message "Package manager dependencies installed successfully." "GOOD"
-                else
-                    print_message "Failed to install dependencies. Please install them manually." "DANGER"
-                    exit 1
+                    print_message "Installation cancelled. Please install dependencies manually." "DANGER"
+                    manual_install_needed=true
                 fi
             else
-                print_message "Installation cancelled. Please install all dependencies manually." "DANGER"
-                exit 1
+                print_message "No supported package manager (apt/dnf/yum) found. Please install packages manually." "DANGER"
+                manual_install_needed=true
             fi
         else
-            print_message "No supported package manager (apt/dnf/yum) found. Please install packages manually." "DANGER"
-            exit 1
+            print_message "Cannot install interactively. Please install the packages manually." "DANGER"
+            manual_install_needed=true
         fi
     fi
     if [ "$yq_missing" = true ]; then
-        print_message "yq is not installed. It is required for parsing config.yml." "WARNING"
+        print_message "yq is not installed. It is required for parsing config.yml." "DANGER"
         if [ "$arch" == "unsupported" ]; then
-            print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
-            manual_install_needed=true
-        else
+             print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
+             manual_install_needed=true
+        elif [ -t 0 ]; then
             read -rp "Would you like to download the latest version for your architecture ($arch) now? (y/n): " response
             if [[ "$response" =~ ^[yY]$ ]]; then
                 print_message "Attempting to download yq with 'sudo wget'... You may be prompted for your password." "INFO"
@@ -353,13 +361,16 @@ check_and_install_dependencies() {
                 print_message "Installation cancelled. Please install yq manually." "DANGER"
                 manual_install_needed=true
             fi
+        else
+            print_message "Cannot install interactively. Please install yq manually." "DANGER"
+            manual_install_needed=true
         fi
     fi
     if [ "$manual_install_needed" = true ]; then
-        print_message "Please address the manually installed dependencies listed above before running the script again." "DANGER"
+        print_message "Please address the missing dependencies listed above before running the script again." "DANGER"
         exit 1
     fi
-    if [ "$yq_missing" = false ] && [ ${#missing_pkgs[@]} -eq 0 ]; then
+    if ! $yq_missing && [ ${#missing_pkgs[@]} -eq 0 ]; then
          print_message "All required dependencies are installed." "GOOD"
     fi
 }
@@ -701,7 +712,7 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
     if [ -n "$DOCKER_CONFIG_PATH" ]; then
-        local expanded_path; expanded_path=$(eval echo "$DOCKER_CONFIG_PATH")
+        local expanded_path; expanded_path="${DOCKER_CONFIG_PATH/#\~/$HOME}"
         export DOCKER_CONFIG="${expanded_path%/*}"
     fi
     local skopeo_opts=()
@@ -837,7 +848,9 @@ check_logs() {
         new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
     fi
     local new_last_timestamp; new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
-    if ! [[ "$new_last_timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+    if [ -z "$new_last_timestamp" ]; then
+        new_last_timestamp="$last_timestamp"
+    elif ! [[ "$new_last_timestamp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
         new_last_timestamp="$last_timestamp"
     fi
     jq -n --arg hash "$new_hash" --arg ts "$new_last_timestamp" \
@@ -991,16 +1004,23 @@ process_container_update() {
     read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
     if [[ "$edit_response" =~ ^[yY]$ ]]; then
         local editor_cmd
-        if [ -n "$VISUAL" ]; then
+        if [ -n "${VISUAL:-}" ]; then
             editor_cmd="$VISUAL"
-        elif [ -n "$EDITOR" ]; then
+        elif [ -n "${EDITOR:-}" ]; then
             editor_cmd="$EDITOR"
         elif command -v nano &>/dev/null; then
             editor_cmd="nano"
         else
             editor_cmd="/usr/bin/vi"
         fi
-        "$editor_cmd" "$full_compose_path"
+        "$editor_cmd" "$full_compose_path" < /dev/tty
+        print_message "Verifying changes in compose file..." "INFO"
+        if ! grep -q -E "image:.*:${new_version}" "$full_compose_path"; then
+            print_message "Verification failed. The new image tag '${new_version}' was not found in the file." "DANGER"
+            print_message "Please apply the changes manually and run 'docker compose up -d'." "WARNING"
+            return
+        fi
+        print_message "Verification successful!" "GOOD"
         local apply_response
         echo
         read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
@@ -1026,6 +1046,11 @@ run_interactive_update_mode() {
     print_message "Starting interactive update check..." "INFO"
     local containers_with_updates=()
     local container_update_details=()
+    if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
+        print_message "State file is missing or invalid. Creating a new one." "INFO"
+        echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
+    fi
+    local state_json; state_json=$(cat "$STATE_FILE")
     mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
     if [ ${#all_containers[@]} -eq 0 ]; then
         print_message "No running containers found to check." "INFO"
@@ -1034,7 +1059,7 @@ run_interactive_update_mode() {
     print_message "Checking ${#all_containers[@]} containers for available updates..." "NONE"
     for container in "${all_containers[@]}"; do
         local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
-        local update_details; update_details=$(check_for_updates "$container" "$current_image")
+        local update_details; update_details=$(check_for_updates "$container" "$current_image" "$state_json")
         if [ $? -ne 0 ]; then
             containers_with_updates+=("$container")
             container_update_details+=("$update_details")
@@ -1054,23 +1079,23 @@ run_interactive_update_mode() {
         print_message "Update cancelled by user." "INFO"
         return
     fi
-	local selections_to_process=()
-	local details_to_process=()
-	if [ "$choice" == "all" ]; then
-    	    selections_to_process=("${containers_with_updates[@]}")
-    	    details_to_process=("${container_update_details[@]}")
-	else
-	    IFS=',' read -r -a selections <<< "$choice"
-	    for sel in "${selections[@]}"; do
-	        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
-		    local index=$((sel - 1))
-		    selections_to_process+=("${containers_with_updates[$index]}")
-		    details_to_process+=("${container_update_details[$index]}")
-        	else
-	            print_message "Invalid selection: '$sel'. Skipping." "DANGER"
-	        fi
-	    done
-	fi
+    local selections_to_process=()
+    local details_to_process=()
+    if [ "$choice" == "all" ]; then
+            selections_to_process=("${containers_with_updates[@]}")
+            details_to_process=("${container_update_details[@]}")
+    else
+        IFS=',' read -r -a selections <<< "$choice"
+        for sel in "${selections[@]}"; do
+            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+            local index=$((sel - 1))
+            selections_to_process+=("${containers_with_updates[$index]}")
+            details_to_process+=("${container_update_details[$index]}")
+            else
+                print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+            fi
+        done
+    fi
         for i in "${!selections_to_process[@]}"; do
             local container_to_update="${selections_to_process[$i]}"
             local details_for_this_container="${details_to_process[$i]}"
@@ -1084,6 +1109,8 @@ run_interactive_update_mode() {
     local prune_choice
     read -rp "${COLOR_YELLOW}Update process finished. Would you like to clean up the system now? (y/n): ${COLOR_RESET}" prune_choice
     if [[ "$prune_choice" =~ ^[yY]$ ]]; then
+        print_message "Waiting 5 seconds for Docker daemon to settle before pruning..." "INFO"
+        sleep 5
         run_prune
     fi
     print_message "Interactive update process finished." "INFO"
@@ -1186,40 +1213,80 @@ perform_checks_for_container() {
 
 # --- Main Execution ---
 main() {
-    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-        print_help
-        return 0
-    fi
+    declare -a WARNING_OR_ERROR_CONTAINERS=()
+    declare -A CONTAINER_ISSUES_MAP
+    declare -a CONTAINER_ARGS=()
+    declare -a CONTAINERS_TO_EXCLUDE=()
+    local run_update_check=true
+    local force_update_check=false
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --exclude=*)
+                local EXCLUDE_STR="${1#*=}"
+                IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+                shift
+                ;;
+            --update)
+                RECREATE_MODE=true
+                INTERACTIVE_UPDATE_MODE=true
+                shift
+                ;;
+            --pull)
+                INTERACTIVE_UPDATE_MODE=true
+                shift
+                ;;
+            --prune)
+                run_prune
+                exit 0
+                ;;
+            --force-update)
+                force_update_check=true
+                shift
+                ;;
+            --no-update)
+                run_update_check=false
+                shift
+                ;;
+            summary)
+                SUMMARY_ONLY_MODE=true
+                shift
+                ;;
+            -h|--help)
+                print_help
+                return 0
+                ;;
+            -*)
+                print_message "Unknown option: $1" "DANGER"
+                print_help
+                return 1
+                ;;
+            *)
+                CONTAINER_ARGS+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    # --- Initial Setup ---
     check_and_install_dependencies
     load_configuration
-    local run_update_check=true
-    declare -a initial_args=("$@")
-    for arg in "$@"; do
-        if [[ "$arg" == "--no-update" ]]; then
-            run_update_check=false
-            break
-        fi
-    done
-    for arg in "$@"; do
-        if [[ "$arg" == "--prune" ]]; then
-            run_prune
-            exit 0
-        fi
-    done
-    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
-        local latest_version
-        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
-        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
-            self_update
+
+    # --- Self-Update Check ---
+    if [[ "$force_update_check" == true || ("$run_update_check" == true && -t 1) ]]; then
+        if [[ "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
+            local latest_version
+            latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+            if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
+                self_update
+            fi
         fi
     fi
-    if [[ " ${initial_args[*]} " =~ " --pull " ]]; then
-        INTERACTIVE_UPDATE_MODE=true
+    # --- Mode Execution ---
+    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
+        run_interactive_update_mode
+        return 0
     fi
-    if [[ " ${initial_args[*]} " =~ " summary " ]]; then
-        SUMMARY_ONLY_MODE=true
-    fi
-    if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
+    if [ "$SUMMARY_ONLY_MODE" = false ]; then
         if [ -t 1 ] && tput colors &>/dev/null && [ "$(tput colors)" -ge 8 ]; then
             print_header_box
         else
@@ -1227,85 +1294,37 @@ main() {
         fi
     fi
     declare -a CONTAINERS_TO_CHECK=()
-    declare -a WARNING_OR_ERROR_CONTAINERS=()
-    declare -A CONTAINER_ISSUES_MAP
-    declare -a CONTAINERS_TO_EXCLUDE=()
-    declare -a remaining_args=()
-    for arg in "$@"; do
-        case "$arg" in
-            --exclude=*)
-                local EXCLUDE_STR="${arg#*=}"
-                IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
-                ;;
-            --update)
-                RECREATE_MODE=true
-                INTERACTIVE_UPDATE_MODE=true
-                ;;
-            --no-update|--pull|summary)
-                ;;
-            *)
-                remaining_args+=("$arg")
-                ;;
-        esac
-    done
-    set -- "${remaining_args[@]}"
-    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
-        run_interactive_update_mode
-        return 0
-    fi
-    if [ "$#" -gt 0 ]; then
-        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-            case "$1" in
-                logs)
-                    shift
-                    if [ -z "$1" ]; then
-                        print_message "Usage: $0 logs <container_name> [filter1] [filter2] ..." "DANGER"
-                        return 1
-                    fi
-                    local container_to_log="$1"
-                    shift
-                    if [ $# -eq 0 ]; then
-                        print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
-                    else
-                        local all_args_string="$*"
-                        local processed_args_string="${all_args_string//,/' '}"
-                        local final_patterns=()
-                        read -r -a final_patterns <<< "$processed_args_string"
-                        local egrep_pattern
-                        egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
-                        local filter_list
-                        filter_list=$(printf "'%s' " "${final_patterns[@]}")
-                        print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
-                    fi
-                    return 0
-                    ;;
-                save)
-                    shift
-                    if [[ "$1" == "logs" && -n "$2" ]]; then
-                        local container_to_save="$2"
-                        save_logs "$container_to_save"
-                    else
-                        echo "Usage: $0 save logs <container_name>"
-                    fi
-                    return 0
-                    ;;
-                *)
-                    CONTAINERS_TO_CHECK=("$@")
-                    ;;
-            esac
-        else
-            CONTAINERS_TO_CHECK=("$@")
+    if [ "${#CONTAINER_ARGS[@]}" -gt 0 ]; then
+        if [[ "${CONTAINER_ARGS[0]}" == "logs" && "$SUMMARY_ONLY_MODE" == false ]]; then
+            local container_to_log="${CONTAINER_ARGS[1]:-}"
+            if [ -z "$container_to_log" ]; then
+                print_message "Usage: $0 logs <container_name> [filter...]" "DANGER"; return 1;
+            fi
+            local filter_patterns=("${CONTAINER_ARGS[@]:2}")
+            if [ ${#filter_patterns[@]} -eq 0 ]; then
+                print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
+                docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+            else
+                local all_args_string="${filter_patterns[*]}"
+                local processed_args_string="${all_args_string//,/' '}"
+                local final_patterns=()
+                read -r -a final_patterns <<< "$processed_args_string"
+                local egrep_pattern
+                egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
+                local filter_list
+                filter_list=$(printf "'%s' " "${final_patterns[@]}")
+                print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
+                docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
+            fi
+            return 0
+        elif [[ "${CONTAINER_ARGS[0]}" == "save" && "${CONTAINER_ARGS[1]}" == "logs" && -n "${CONTAINER_ARGS[2]}" && "$SUMMARY_ONLY_MODE" == false ]]; then
+            save_logs "${CONTAINER_ARGS[2]}"; return 0;
         fi
-    fi
-    if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
-        if [ -n "$CONTAINER_NAMES" ]; then
-            IFS=',' read -r -a temp_env_names <<< "$CONTAINER_NAMES"
-            for name_from_env in "${temp_env_names[@]}"; do
-                local name_trimmed="${name_from_env#"${name_from_env%%[![:space:]]*}"}"; name_trimmed="${name_trimmed%"${name_trimmed##*[![:space:]]}"}"
-                if [ -n "$name_trimmed" ]; then CONTAINERS_TO_CHECK+=("$name_trimmed"); fi
-            done
+        CONTAINERS_TO_CHECK=("${CONTAINER_ARGS[@]}")
+    else
+        local CONTAINER_NAMES_FROM_ENV; CONTAINER_NAMES_FROM_ENV=$(printenv CONTAINER_NAMES || true)
+        if [ -n "$CONTAINER_NAMES_FROM_ENV" ]; then
+            IFS=',' read -r -a CONTAINERS_TO_CHECK <<< "$CONTAINER_NAMES_FROM_ENV"
         elif [ ${#CONTAINER_NAMES_FROM_CONFIG_FILE[@]} -gt 0 ]; then
             CONTAINERS_TO_CHECK=("${CONTAINER_NAMES_FROM_CONFIG_FILE[@]}")
         else
@@ -1318,17 +1337,14 @@ main() {
         for container in "${CONTAINERS_TO_CHECK[@]}"; do
             local is_excluded=false
             for excluded in "${CONTAINERS_TO_EXCLUDE[@]}"; do
-                if [[ "$container" == "$excluded" ]]; then
-                    is_excluded=true
-                    break
-                fi
+                if [[ "$container" == "$excluded" ]]; then is_excluded=true; break; fi
             done
-            if [ "$is_excluded" = false ]; then
-                temp_containers_to_check+=("$container")
-            fi
+            if [ "$is_excluded" = false ]; then temp_containers_to_check+=("$container"); fi
         done
         CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
     fi
+
+    # --- Main Monitoring Logic ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
         if [ -f "$LOCK_FILE" ]; then
@@ -1391,7 +1407,6 @@ main() {
             local progress_pid=$!
             exec 3> progress_pipe
         fi
-        # Export the state as an environment variable so it's available to sub-shells
         export CURRENT_STATE_JSON_STRING="$current_state_json"
         printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
@@ -1497,15 +1512,16 @@ main() {
         rm -f "$LOCK_FILE"
         trap - EXIT
         rm -rf "$results_dir"
-    fi
-    PRINT_MESSAGE_FORCE_STDOUT=true
-    if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
-        print_message "Summary generation completed." "SUMMARY"
-    elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
-        print_message "No containers specified or found running to monitor." "INFO"
-        print_summary
     else
-        print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
+        PRINT_MESSAGE_FORCE_STDOUT=true
+        if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
+            print_message "Summary generation completed." "SUMMARY"
+        elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
+            print_message "No containers specified or found running to monitor." "INFO"
+            print_summary
+        else
+            print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
+        fi
     fi
 }
 main "$@"
