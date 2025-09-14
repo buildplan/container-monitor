@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.46 ---
+# --- v0.47 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -50,7 +50,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.46"
+VERSION="v0.47"
 VERSION_DATE="2025-09-14"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -671,6 +671,20 @@ check_network() {
     if [ $issues_found -eq 0 ]; then print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} No significant network issues detected for '$container_name'." "INFO"; fi
     return $issues_found
 }
+get_update_strategy() {
+    local image_name="$1"
+    local service_name="${image_name##*/}" 
+    local strategy=""
+    strategy=$(yq e ".containers.update_strategies.\"$image_name\" // \"\"" "$SCRIPT_DIR/config.yml" 2>/dev/null)
+    if [ -z "$strategy" ] && [ "$image_name" != "$service_name" ]; then
+        strategy=$(yq e ".containers.update_strategies.\"$service_name\" // \"\"" "$SCRIPT_DIR/config.yml" 2>/dev/null)
+    fi
+    if [ -n "$strategy" ]; then
+        echo "$strategy"
+    else
+        echo "default"
+    fi
+}
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
     local state_json="$3"
@@ -701,6 +715,8 @@ check_for_updates() {
         current_tag="${current_image_ref##*:}"
         image_name_no_tag="${current_image_ref%:$current_tag}"
     fi
+    local lookup_name; lookup_name=$(echo "$image_name_no_tag" | sed -e 's#^docker.io/##' -e 's#^library/##')
+    local strategy; strategy=$(get_update_strategy "$lookup_name")
     local registry_host="registry-1.docker.io"; local image_path_for_skopeo="$image_name_no_tag"
     if [[ "$image_name_no_tag" == *"/"* ]]; then
         local first_part; first_part=$(echo "$image_name_no_tag" | cut -d'/' -f1)
@@ -720,9 +736,6 @@ check_for_updates() {
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
     get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
-    get_update_strategy() { yq e ".containers.update_strategies.\"${1}\" // .containers.update_strategies.\"${1%%:*}\" // \"default\"" "$SCRIPT_DIR/config.yml" 2>/dev/null; }
-    local strategy; strategy=$(get_update_strategy "$image_name_no_tag")
-
     if [[ "$current_tag" =~ ^(latest|stable|rolling)$ ]]; then
         strategy="digest"
     fi
@@ -785,14 +798,14 @@ check_for_updates() {
     fi
     if [[ "$strategy" == "digest" ]]; then
         local summary_message="$latest_stable_version"
-        local release_url; release_url=$(get_release_url "$image_name_no_tag")
+        local release_url; release_url=$(get_release_url "$lookup_name")
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $summary_message" "WARNING" >&2
         echo "$summary_message"
         return 1
     elif [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
         local summary_message="Update available: ${latest_stable_version}"
-        local release_url; release_url=$(get_release_url "$image_name_no_tag")
+        local release_url; release_url=$(get_release_url "$lookup_name")
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})." "WARNING" >&2
         echo "$summary_message"
@@ -1371,8 +1384,10 @@ main() {
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
         rm -f "$LOCK_FILE"
         trap - EXIT
+        # In your main() function
+
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
-                   check_resource_usage check_disk_space check_network check_for_updates check_logs
+                   check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
                NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS
