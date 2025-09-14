@@ -1206,6 +1206,8 @@ perform_checks_for_container() {
 
 # --- Main Execution ---
 main() {
+    declare -a WARNING_OR_ERROR_CONTAINERS=()
+    declare -A CONTAINER_ISSUES_MAP
     declare -a CONTAINER_ARGS=()
     declare -a CONTAINERS_TO_EXCLUDE=()
     local run_update_check=true
