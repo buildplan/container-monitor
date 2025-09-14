@@ -1004,16 +1004,16 @@ process_container_update() {
     read -rp "Would you like to open '${full_compose_path}' now to edit the tag? (y/n): " edit_response < /dev/tty
     if [[ "$edit_response" =~ ^[yY]$ ]]; then
         local editor_cmd
-        if [ -n "$VISUAL" ]; then
+        if [ -n "${VISUAL:-}" ]; then
             editor_cmd="$VISUAL"
-        elif [ -n "$EDITOR" ]; then
+        elif [ -n "${EDITOR:-}" ]; then
             editor_cmd="$EDITOR"
         elif command -v nano &>/dev/null; then
             editor_cmd="nano"
         else
             editor_cmd="/usr/bin/vi"
         fi
-        "$editor_cmd" "$full_compose_path"
+        "$editor_cmd" "$full_compose_path" < /dev/tty
         print_message "Verifying changes in compose file..." "INFO"
         if ! grep -q -E "image:.*:${new_version}" "$full_compose_path"; then
             print_message "Verification failed. The new image tag '${new_version}' was not found in the file." "DANGER"
@@ -1046,6 +1046,11 @@ run_interactive_update_mode() {
     print_message "Starting interactive update check..." "INFO"
     local containers_with_updates=()
     local container_update_details=()
+    if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
+        print_message "State file is missing or invalid. Creating a new one." "INFO"
+        echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
+    fi
+    local state_json; state_json=$(cat "$STATE_FILE")
     mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
     if [ ${#all_containers[@]} -eq 0 ]; then
         print_message "No running containers found to check." "INFO"
@@ -1054,7 +1059,7 @@ run_interactive_update_mode() {
     print_message "Checking ${#all_containers[@]} containers for available updates..." "NONE"
     for container in "${all_containers[@]}"; do
         local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
-        local update_details; update_details=$(check_for_updates "$container" "$current_image")
+        local update_details; update_details=$(check_for_updates "$container" "$current_image" "$state_json")
         if [ $? -ne 0 ]; then
             containers_with_updates+=("$container")
             container_update_details+=("$update_details")
@@ -1074,23 +1079,23 @@ run_interactive_update_mode() {
         print_message "Update cancelled by user." "INFO"
         return
     fi
-	local selections_to_process=()
-	local details_to_process=()
-	if [ "$choice" == "all" ]; then
-    	    selections_to_process=("${containers_with_updates[@]}")
-    	    details_to_process=("${container_update_details[@]}")
-	else
-	    IFS=',' read -r -a selections <<< "$choice"
-	    for sel in "${selections[@]}"; do
-	        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
-		    local index=$((sel - 1))
-		    selections_to_process+=("${containers_with_updates[$index]}")
-		    details_to_process+=("${container_update_details[$index]}")
-        	else
-	            print_message "Invalid selection: '$sel'. Skipping." "DANGER"
-	        fi
-	    done
-	fi
+    local selections_to_process=()
+    local details_to_process=()
+    if [ "$choice" == "all" ]; then
+            selections_to_process=("${containers_with_updates[@]}")
+            details_to_process=("${container_update_details[@]}")
+    else
+        IFS=',' read -r -a selections <<< "$choice"
+        for sel in "${selections[@]}"; do
+            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#containers_with_updates[@]}" ]; then
+            local index=$((sel - 1))
+            selections_to_process+=("${containers_with_updates[$index]}")
+            details_to_process+=("${container_update_details[$index]}")
+            else
+                print_message "Invalid selection: '$sel'. Skipping." "DANGER"
+            fi
+        done
+    fi
         for i in "${!selections_to_process[@]}"; do
             local container_to_update="${selections_to_process[$i]}"
             local details_for_this_container="${details_to_process[$i]}"
@@ -1104,6 +1109,8 @@ run_interactive_update_mode() {
     local prune_choice
     read -rp "${COLOR_YELLOW}Update process finished. Would you like to clean up the system now? (y/n): ${COLOR_RESET}" prune_choice
     if [[ "$prune_choice" =~ ^[yY]$ ]]; then
+        print_message "Waiting 5 seconds for Docker daemon to settle before pruning..." "INFO"
+        sleep 5
         run_prune
     fi
     print_message "Interactive update process finished." "INFO"
