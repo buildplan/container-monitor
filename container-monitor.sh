@@ -702,7 +702,7 @@ check_for_updates() {
     fi
     local skopeo_repo_ref="docker://$registry_host/$image_path_for_skopeo"
     if [ -n "$DOCKER_CONFIG_PATH" ]; then
-        local expanded_path; expanded_path=$(eval echo "$DOCKER_CONFIG_PATH")
+        local expanded_path; expanded_path="${DOCKER_CONFIG_PATH/#\~/$HOME}"
         export DOCKER_CONFIG="${expanded_path%/*}"
     fi
     local skopeo_opts=()
@@ -1002,6 +1002,13 @@ process_container_update() {
             editor_cmd="/usr/bin/vi"
         fi
         "$editor_cmd" "$full_compose_path"
+        print_message "Verifying changes in compose file..." "INFO"
+        if ! grep -q -E "image:.*:${new_version}" "$full_compose_path"; then
+            print_message "Verification failed. The new image tag '${new_version}' was not found in the file." "DANGER"
+            print_message "Please apply the changes manually and run 'docker compose up -d'." "WARNING"
+            return
+        fi
+        print_message "Verification successful!" "GOOD"
         local apply_response
         echo
         read -rp "${COLOR_YELLOW}File closed. Recreate '${container_name}' now to apply the changes? (y/n): ${COLOR_RESET}" apply_response < /dev/tty
