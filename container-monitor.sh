@@ -1384,8 +1384,6 @@ main() {
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
         rm -f "$LOCK_FILE"
         trap - EXIT
-        # In your main() function
-
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
