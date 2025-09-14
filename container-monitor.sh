@@ -316,17 +316,20 @@ check_and_install_dependencies() {
                 read -rp "Would you like to attempt to install them now? (y/n): " response
                 if [[ "$response" =~ ^[yY]$ ]]; then
                     print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
-                    local install_cmd
                     if [ "$pkg_manager" == "apt" ]; then
-                        install_cmd="sudo apt-get update && sudo apt-get install -y"
+                        if sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"; then
+                            print_message "Package manager dependencies installed successfully." "GOOD"
+                        else
+                            print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                            manual_install_needed=true
+                        fi
                     else
-                        install_cmd="sudo $pkg_manager install -y"
-                    fi
-                    if sudo ${install_cmd} "${missing_pkgs[@]}"; then
-                        print_message "Package manager dependencies installed successfully." "GOOD"
-                    else
-                        print_message "Failed to install dependencies. Please install them manually." "DANGER"
-                        manual_install_needed=true
+                        if sudo "$pkg_manager" install -y "${missing_pkgs[@]}"; then
+                            print_message "Package manager dependencies installed successfully." "GOOD"
+                        else
+                            print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                            manual_install_needed=true
+                        fi
                     fi
                 else
                     print_message "Installation cancelled. Please install dependencies manually." "DANGER"
