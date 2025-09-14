@@ -1285,7 +1285,7 @@ main() {
         fi
     fi
     declare -a CONTAINERS_TO_CHECK=()
-    if [ "${#CONTAINER_ARGS[@]}" -gt 0 ]; a
+    if [ "${#CONTAINER_ARGS[@]}" -gt 0 ]; then
         if [[ "${CONTAINER_ARGS[0]}" == "logs" && "$SUMMARY_ONLY_MODE" == false ]]; then
             local container_to_log="${CONTAINER_ARGS[1]:-}"
             if [ -z "$container_to_log" ]; then
