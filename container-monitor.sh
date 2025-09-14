@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# --- v0.45 ---
+# --- v0.46 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -29,6 +29,7 @@
 #   ./container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./container-monitor.sh --pull                        - Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                      - Choose which containers to update and recreate (pull and recreate container)
+#   ./container-monitor.sh --force-update                - Force update check in non-interactive mode (e.g., cron)
 #   ./container-monitor.sh --exclude=c1,c2               - Run on all containers, excluding specific ones.
 #   ./container-monitor.sh summary                       - Run all checks silently and show only the final summary.
 #   ./container-monitor.sh summary <c1> <c2> ...         - Summary mode for specific containers.
@@ -48,8 +49,8 @@
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.45"
-VERSION_DATE="2025-09-06"
+VERSION="v0.46"
+VERSION_DATE="2025-09-14"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1193,24 +1194,25 @@ main() {
     check_and_install_dependencies
     load_configuration
     local run_update_check=true
+    local force_update_check=false
     declare -a initial_args=("$@")
     for arg in "$@"; do
         if [[ "$arg" == "--no-update" ]]; then
             run_update_check=false
-            break
-        fi
-    done
-    for arg in "$@"; do
-        if [[ "$arg" == "--prune" ]]; then
+        elif [[ "$arg" == "--force-update" ]]; then
+            force_update_check=true
+        elif [[ "$arg" == "--prune" ]]; then
             run_prune
             exit 0
         fi
     done
-    if [[ "$run_update_check" == true && "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
-        local latest_version
-        latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
-        if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
-            self_update
+    if [[ "$force_update_check" == true || ("$run_update_check" == true && -t 1) ]]; then
+        if [[ "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
+            local latest_version
+            latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+            if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
+                self_update
+            fi
         fi
     fi
     if [[ " ${initial_args[*]} " =~ " --pull " ]]; then
@@ -1241,7 +1243,7 @@ main() {
                 RECREATE_MODE=true
                 INTERACTIVE_UPDATE_MODE=true
                 ;;
-            --no-update|--pull|summary)
+            --no-update|--pull|summary|--force-update)
                 ;;
             *)
                 remaining_args+=("$arg")
