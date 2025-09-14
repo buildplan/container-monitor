@@ -310,38 +310,43 @@ check_and_install_dependencies() {
         fi
     done
     if [ ${#missing_pkgs[@]} -gt 0 ]; then
-        print_message "The following required packages can be installed via your package manager: ${missing_pkgs[*]}" "WARNING"
-        if [ -n "$pkg_manager" ]; then
-            read -rp "Would you like to attempt to install them now? (y/n): " response
-            if [[ "$response" =~ ^[yY]$ ]]; then
-                print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
-                local install_cmd
-                if [ "$pkg_manager" == "apt" ]; then
-                    install_cmd="sudo apt-get update && sudo apt-get install -y"
+        print_message "The following required packages are missing: ${missing_pkgs[*]}" "DANGER"
+        if [ -t 0 ]; then
+            if [ -n "$pkg_manager" ]; then
+                read -rp "Would you like to attempt to install them now? (y/n): " response
+                if [[ "$response" =~ ^[yY]$ ]]; then
+                    print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
+                    local install_cmd
+                    if [ "$pkg_manager" == "apt" ]; then
+                        install_cmd="sudo apt-get update && sudo apt-get install -y"
+                    else
+                        install_cmd="sudo $pkg_manager install -y"
+                    fi
+                    if sudo ${install_cmd} "${missing_pkgs[@]}"; then
+                        print_message "Package manager dependencies installed successfully." "GOOD"
+                    else
+                        print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                        manual_install_needed=true
+                    fi
                 else
-                    install_cmd="sudo $pkg_manager install -y"
-                fi
-                if eval "$install_cmd ${missing_pkgs[*]}"; then
-                    print_message "Package manager dependencies installed successfully." "GOOD"
-                else
-                    print_message "Failed to install dependencies. Please install them manually." "DANGER"
-                    exit 1
+                    print_message "Installation cancelled. Please install dependencies manually." "DANGER"
+                    manual_install_needed=true
                 fi
             else
-                print_message "Installation cancelled. Please install all dependencies manually." "DANGER"
-                exit 1
+                print_message "No supported package manager (apt/dnf/yum) found. Please install packages manually." "DANGER"
+                manual_install_needed=true
             fi
         else
-            print_message "No supported package manager (apt/dnf/yum) found. Please install packages manually." "DANGER"
-            exit 1
+            print_message "Cannot install interactively. Please install the packages manually." "DANGER"
+            manual_install_needed=true
         fi
     fi
     if [ "$yq_missing" = true ]; then
-        print_message "yq is not installed. It is required for parsing config.yml." "WARNING"
+        print_message "yq is not installed. It is required for parsing config.yml." "DANGER"
         if [ "$arch" == "unsupported" ]; then
-            print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
-            manual_install_needed=true
-        else
+             print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
+             manual_install_needed=true
+        elif [ -t 0 ]; then
             read -rp "Would you like to download the latest version for your architecture ($arch) now? (y/n): " response
             if [[ "$response" =~ ^[yY]$ ]]; then
                 print_message "Attempting to download yq with 'sudo wget'... You may be prompted for your password." "INFO"
@@ -356,13 +361,16 @@ check_and_install_dependencies() {
                 print_message "Installation cancelled. Please install yq manually." "DANGER"
                 manual_install_needed=true
             fi
+        else
+            print_message "Cannot install interactively. Please install yq manually." "DANGER"
+            manual_install_needed=true
         fi
     fi
     if [ "$manual_install_needed" = true ]; then
-        print_message "Please address the manually installed dependencies listed above before running the script again." "DANGER"
+        print_message "Please address the missing dependencies listed above before running the script again." "DANGER"
         exit 1
     fi
-    if [ "$yq_missing" = false ] && [ ${#missing_pkgs[@]} -eq 0 ]; then
+    if ! $yq_missing && [ ${#missing_pkgs[@]} -eq 0 ]; then
          print_message "All required dependencies are installed." "GOOD"
     fi
 }
@@ -1198,25 +1206,63 @@ perform_checks_for_container() {
 
 # --- Main Execution ---
 main() {
-    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-        print_help
-        return 0
-    fi
-    check_and_install_dependencies
-    load_configuration
+    declare -a CONTAINER_ARGS=()
+    declare -a CONTAINERS_TO_EXCLUDE=()
     local run_update_check=true
     local force_update_check=false
-    declare -a initial_args=("$@")
-    for arg in "$@"; do
-        if [[ "$arg" == "--no-update" ]]; then
-            run_update_check=false
-        elif [[ "$arg" == "--force-update" ]]; then
-            force_update_check=true
-        elif [[ "$arg" == "--prune" ]]; then
-            run_prune
-            exit 0
-        fi
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --exclude=*)
+                local EXCLUDE_STR="${1#*=}"
+                IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
+                shift
+                ;;
+            --update)
+                RECREATE_MODE=true
+                INTERACTIVE_UPDATE_MODE=true
+                shift
+                ;;
+            --pull)
+                INTERACTIVE_UPDATE_MODE=true
+                shift
+                ;;
+            --prune)
+                run_prune
+                exit 0
+                ;;
+            --force-update)
+                force_update_check=true
+                shift
+                ;;
+            --no-update)
+                run_update_check=false
+                shift
+                ;;
+            summary)
+                SUMMARY_ONLY_MODE=true
+                shift
+                ;;
+            -h|--help)
+                print_help
+                return 0
+                ;;
+            -*)
+                print_message "Unknown option: $1" "DANGER"
+                print_help
+                return 1
+                ;;
+            *)
+                CONTAINER_ARGS+=("$1")
+                shift
+                ;;
+        esac
     done
+
+    # --- Initial Setup ---
+    check_and_install_dependencies
+    load_configuration
+
+    # --- Self-Update Check ---
     if [[ "$force_update_check" == true || ("$run_update_check" == true && -t 1) ]]; then
         if [[ "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
             local latest_version
@@ -1226,13 +1272,12 @@ main() {
             fi
         fi
     fi
-    if [[ " ${initial_args[*]} " =~ " --pull " ]]; then
-        INTERACTIVE_UPDATE_MODE=true
+    # --- Mode Execution ---
+    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
+        run_interactive_update_mode
+        return 0
     fi
-    if [[ " ${initial_args[*]} " =~ " summary " ]]; then
-        SUMMARY_ONLY_MODE=true
-    fi
-    if [ "$SUMMARY_ONLY_MODE" = false ] && [ "$INTERACTIVE_UPDATE_MODE" = false ]; then
+    if [ "$SUMMARY_ONLY_MODE" = false ]; then
         if [ -t 1 ] && tput colors &>/dev/null && [ "$(tput colors)" -ge 8 ]; then
             print_header_box
         else
@@ -1240,85 +1285,37 @@ main() {
         fi
     fi
     declare -a CONTAINERS_TO_CHECK=()
-    declare -a WARNING_OR_ERROR_CONTAINERS=()
-    declare -A CONTAINER_ISSUES_MAP
-    declare -a CONTAINERS_TO_EXCLUDE=()
-    declare -a remaining_args=()
-    for arg in "$@"; do
-        case "$arg" in
-            --exclude=*)
-                local EXCLUDE_STR="${arg#*=}"
-                IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
-                ;;
-            --update)
-                RECREATE_MODE=true
-                INTERACTIVE_UPDATE_MODE=true
-                ;;
-            --no-update|--pull|summary|--force-update)
-                ;;
-            *)
-                remaining_args+=("$arg")
-                ;;
-        esac
-    done
-    set -- "${remaining_args[@]}"
-    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
-        run_interactive_update_mode
-        return 0
-    fi
-    if [ "$#" -gt 0 ]; then
-        if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-            case "$1" in
-                logs)
-                    shift
-                    if [ -z "$1" ]; then
-                        print_message "Usage: $0 logs <container_name> [filter1] [filter2] ..." "DANGER"
-                        return 1
-                    fi
-                    local container_to_log="$1"
-                    shift
-                    if [ $# -eq 0 ]; then
-                        print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
-                    else
-                        local all_args_string="$*"
-                        local processed_args_string="${all_args_string//,/' '}"
-                        local final_patterns=()
-                        read -r -a final_patterns <<< "$processed_args_string"
-                        local egrep_pattern
-                        egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
-                        local filter_list
-                        filter_list=$(printf "'%s' " "${final_patterns[@]}")
-                        print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
-                        docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
-                    fi
-                    return 0
-                    ;;
-                save)
-                    shift
-                    if [[ "$1" == "logs" && -n "$2" ]]; then
-                        local container_to_save="$2"
-                        save_logs "$container_to_save"
-                    else
-                        echo "Usage: $0 save logs <container_name>"
-                    fi
-                    return 0
-                    ;;
-                *)
-                    CONTAINERS_TO_CHECK=("$@")
-                    ;;
-            esac
-        else
-            CONTAINERS_TO_CHECK=("$@")
+    if [ "${#CONTAINER_ARGS[@]}" -gt 0 ]; a
+        if [[ "${CONTAINER_ARGS[0]}" == "logs" && "$SUMMARY_ONLY_MODE" == false ]]; then
+            local container_to_log="${CONTAINER_ARGS[1]:-}"
+            if [ -z "$container_to_log" ]; then
+                print_message "Usage: $0 logs <container_name> [filter...]" "DANGER"; return 1;
+            fi
+            local filter_patterns=("${CONTAINER_ARGS[@]:2}")
+            if [ ${#filter_patterns[@]} -eq 0 ]; then
+                print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
+                docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
+            else
+                local all_args_string="${filter_patterns[*]}"
+                local processed_args_string="${all_args_string//,/' '}"
+                local final_patterns=()
+                read -r -a final_patterns <<< "$processed_args_string"
+                local egrep_pattern
+                egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
+                local filter_list
+                filter_list=$(printf "'%s' " "${final_patterns[@]}")
+                print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
+                docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
+            fi
+            return 0
+        elif [[ "${CONTAINER_ARGS[0]}" == "save" && "${CONTAINER_ARGS[1]}" == "logs" && -n "${CONTAINER_ARGS[2]}" && "$SUMMARY_ONLY_MODE" == false ]]; then
+            save_logs "${CONTAINER_ARGS[2]}"; return 0;
         fi
-    fi
-    if [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
-        if [ -n "$CONTAINER_NAMES" ]; then
-            IFS=',' read -r -a temp_env_names <<< "$CONTAINER_NAMES"
-            for name_from_env in "${temp_env_names[@]}"; do
-                local name_trimmed="${name_from_env#"${name_from_env%%[![:space:]]*}"}"; name_trimmed="${name_trimmed%"${name_trimmed##*[![:space:]]}"}"
-                if [ -n "$name_trimmed" ]; then CONTAINERS_TO_CHECK+=("$name_trimmed"); fi
-            done
+        CONTAINERS_TO_CHECK=("${CONTAINER_ARGS[@]}")
+    else
+        local CONTAINER_NAMES_FROM_ENV; CONTAINER_NAMES_FROM_ENV=$(printenv CONTAINER_NAMES || true)
+        if [ -n "$CONTAINER_NAMES_FROM_ENV" ]; then
+            IFS=',' read -r -a CONTAINERS_TO_CHECK <<< "$CONTAINER_NAMES_FROM_ENV"
         elif [ ${#CONTAINER_NAMES_FROM_CONFIG_FILE[@]} -gt 0 ]; then
             CONTAINERS_TO_CHECK=("${CONTAINER_NAMES_FROM_CONFIG_FILE[@]}")
         else
@@ -1331,17 +1328,14 @@ main() {
         for container in "${CONTAINERS_TO_CHECK[@]}"; do
             local is_excluded=false
             for excluded in "${CONTAINERS_TO_EXCLUDE[@]}"; do
-                if [[ "$container" == "$excluded" ]]; then
-                    is_excluded=true
-                    break
-                fi
+                if [[ "$container" == "$excluded" ]]; then is_excluded=true; break; fi
             done
-            if [ "$is_excluded" = false ]; then
-                temp_containers_to_check+=("$container")
-            fi
+            if [ "$is_excluded" = false ]; then temp_containers_to_check+=("$container"); fi
         done
         CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
     fi
+
+    # --- Main Monitoring Logic ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
         if [ -f "$LOCK_FILE" ]; then
@@ -1404,7 +1398,6 @@ main() {
             local progress_pid=$!
             exec 3> progress_pipe
         fi
-        # Export the state as an environment variable so it's available to sub-shells
         export CURRENT_STATE_JSON_STRING="$current_state_json"
         printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
@@ -1510,15 +1503,16 @@ main() {
         rm -f "$LOCK_FILE"
         trap - EXIT
         rm -rf "$results_dir"
-    fi
-    PRINT_MESSAGE_FORCE_STDOUT=true
-    if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
-        print_message "Summary generation completed." "SUMMARY"
-    elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
-        print_message "No containers specified or found running to monitor." "INFO"
-        print_summary
     else
-        print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
+        PRINT_MESSAGE_FORCE_STDOUT=true
+        if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
+            print_message "Summary generation completed." "SUMMARY"
+        elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
+            print_message "No containers specified or found running to monitor." "INFO"
+            print_summary
+        else
+            print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
+        fi
     fi
 }
 main "$@"
