@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -uo pipefail
 
 # --- v0.46 ---
 # Description:
