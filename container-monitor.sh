@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.48 ---
+# --- v0.49 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -50,8 +50,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.48"
-VERSION_DATE="2025-09-14"
+VERSION="v0.49"
+VERSION_DATE="2025-09-15"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -164,7 +164,7 @@ load_configuration() {
     set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "~/.docker/config.json"
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
 
-    if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>&1); then
+    if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
         LOG_ERROR_PATTERNS=()
     fi
@@ -860,7 +860,12 @@ check_logs() {
     local current_errors; current_errors=$(echo "$logs_to_process" | grep -i -E "$error_regex")
     local new_hash=""
     if [ -n "$current_errors" ]; then
-        local cleaned_errors; cleaned_errors=$(echo "$current_errors" | sed -E "s/$LOG_CLEAN_PATTERN//")
+        local cleaned_errors
+        if [ -n "$LOG_CLEAN_PATTERN" ]; then
+            cleaned_errors=$(echo "$current_errors" | sed -E "s/$LOG_CLEAN_PATTERN//")
+        else
+            cleaned_errors="$current_errors"
+        fi
         new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
     fi
     local new_last_timestamp; new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
