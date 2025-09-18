@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.49 ---
+# --- v0.50 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -38,6 +38,7 @@ set -uo pipefail
 #   ./container-monitor.sh logs <container> [pattern...] - Show logs for a container, with optional filtering (e.g., logs my-app error warn).
 #   ./container-monitor.sh save logs <container>         - Save logs for a specific container to a file
 #   ./container-monitor.sh --prune                       - Run Docker's system prune to clean up unused resources.
+#   ./container-monitor.sh --force                       - Bypass cache and force a new check for image updates
 #   ./container-monitor.sh --no-update                   - Run without checking for a script update.
 #   ./container-monitor.sh --help [or -h]                - Shows script usage commands.
 #
@@ -50,8 +51,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.49"
-VERSION_DATE="2025-09-15"
+VERSION="v0.50"
+VERSION_DATE="2025-09-18"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -70,6 +71,7 @@ PRINT_MESSAGE_FORCE_STDOUT=false
 INTERACTIVE_UPDATE_MODE=false
 RECREATE_MODE=false
 UPDATE_SKIPPED=false
+FORCE_UPDATE_CHECK=false
 
 # --- Get path to script directory ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -219,6 +221,7 @@ print_help() {
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
+    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cached results and force a new update check${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}" "${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh summary${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
     printf "$format" "${COLOR_YELLOW}./container-monitor.sh logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
@@ -696,19 +699,21 @@ check_for_updates() {
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
     local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g')
-    local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
-    if [ -n "$cached_entry" ]; then
-        local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
-        local current_ts; current_ts=$(date +%s)
-        local cache_age_sec=$((current_ts - cached_ts))
-        local cache_max_age_sec=$((UPDATE_CHECK_CACHE_HOURS * 3600))
-        if [ "$cache_age_sec" -lt "$cache_max_age_sec" ]; then
-            local cached_msg; cached_msg=$(jq -r '.message' <<< "$cached_entry")
-            local cached_code; cached_code=$(jq -r '.exit_code' <<< "$cached_entry")
-            if [ "$cached_code" -ne 0 ]; then
-                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} ${cached_msg} (cached)" "WARNING" >&2; echo "$cached_msg"; return "$cached_code"
-            else
-                print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date (cached)." "GOOD" >&2; return 0
+    if [ "$FORCE_UPDATE_CHECK" = false ]; then
+        local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
+        if [ -n "$cached_entry" ]; then
+            local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
+            local current_ts; current_ts=$(date +%s)
+            local cache_age_sec=$((current_ts - cached_ts))
+            local cache_max_age_sec=$((UPDATE_CHECK_CACHE_HOURS * 3600))
+            if [ "$cache_age_sec" -lt "$cache_max_age_sec" ]; then
+                local cached_msg; cached_msg=$(jq -r '.message' <<< "$cached_entry")
+                local cached_code; cached_code=$(jq -r '.exit_code' <<< "$cached_entry")
+                if [ "$cached_code" -ne 0 ]; then
+                    print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} ${cached_msg} (cached)" "WARNING" >&2; echo "$cached_msg"; return "$cached_code"
+                else
+                    print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date (cached)." "GOOD" >&2; return 0
+                fi
             fi
         fi
     fi
@@ -1260,6 +1265,10 @@ main() {
                 run_prune
                 exit 0
                 ;;
+            --force)
+                FORCE_UPDATE_CHECK=true
+                shift
+                ;;
             --force-update)
                 force_update_check=true
                 shift
@@ -1396,7 +1405,7 @@ main() {
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
-               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
