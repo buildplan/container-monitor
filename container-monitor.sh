@@ -699,7 +699,7 @@ check_for_updates() {
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
     local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g')
-    if [ "$FORCE_UPDATE_CHECK" = false ]; then # <--- ADD THIS LINE
+    if [ "$FORCE_UPDATE_CHECK" = false ]; then
         local cached_entry; cached_entry=$(jq -r --arg key "$cache_key" '.updates[$key] // ""' <<< "$state_json")
         if [ -n "$cached_entry" ]; then
             local cached_ts; cached_ts=$(jq -r '.timestamp' <<< "$cached_entry")
