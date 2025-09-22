@@ -750,7 +750,7 @@ check_for_updates() {
     local latest_stable_version=""
     local update_check_failed=false
     local error_message=""
-	case "$strategy" in
+    case "$strategy" in
         "digest")
             local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
             local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
@@ -768,11 +768,12 @@ check_for_updates() {
                         local remote_created; remote_created=$(jq -r '.Created // empty' <<< "$remote_inspect_output")
                         local remote_size; remote_size=$(jq -r '.Size // empty' <<< "$remote_inspect_output")
                         local remote_date_str="Unknown"
+
                         if [ -n "$remote_created" ]; then
                             remote_date_str=$(date -d "$remote_created" +"%Y-%m-%d %H:%M" 2>/dev/null || echo "$remote_created")
                         fi
                         latest_stable_version="New build found (Created: $remote_date_str"
-                        if [[ -n "$remote_size" && "$remote_size" =~ ^[0-9]+$ ]]; then
+                        if [[ -n "$remote_size" && "$remote_size" =~ ^[0-9]*\.?[0-9]+$ ]]; then
                             local human_readable_remote_size
                             human_readable_remote_size=$(awk -v size="$remote_size" 'BEGIN { s="B K M G T P E Z Y"; while(size >= 1024 && length(s) > 1) { size /= 1024; s=substr(s, 3) } printf "%.1f%s", size, substr(s, 1, 1) }')
                             latest_stable_version+=", Size: ${human_readable_remote_size}"
