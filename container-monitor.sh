@@ -768,7 +768,6 @@ check_for_updates() {
                         local remote_created; remote_created=$(jq -r '.Created // empty' <<< "$remote_inspect_output")
                         local remote_size; remote_size=$(jq -r '.Size // empty' <<< "$remote_inspect_output")
                         local remote_date_str="Unknown"
-
                         if [ -n "$remote_created" ]; then
                             remote_date_str=$(date -d "$remote_created" +"%Y-%m-%d %H:%M" 2>/dev/null || echo "$remote_created")
                         fi
