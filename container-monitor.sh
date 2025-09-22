@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.50 ---
+# --- v0.51 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -51,8 +51,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.50"
-VERSION_DATE="2025-09-18"
+VERSION="v0.51"
+VERSION_DATE="2025-09-22"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -750,7 +750,7 @@ check_for_updates() {
     local latest_stable_version=""
     local update_check_failed=false
     local error_message=""
-    case "$strategy" in
+	case "$strategy" in
         "digest")
             local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
             local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
@@ -765,13 +765,19 @@ check_for_updates() {
                 else
                     local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$remote_inspect_output")
                     if [ "$remote_digest" != "$local_digest" ]; then
-                        local local_size; local_size=$(jq -r '.[0].Size' <<< "$local_inspect")
-                        local remote_created; remote_created=$(jq -r '.Created' <<< "$remote_inspect_output")
-                        local remote_size; remote_size=$(jq -r '.Size' <<< "$remote_inspect_output")
-                        local size_delta=$((remote_size - local_size))
-                        local human_readable_delta; human_readable_delta=$(awk -v delta="$size_delta" 'BEGIN { s="B K M G T P E Z Y"; split(s, a); sig=delta<0?"-":"+"; delta=delta<0?-delta:delta; while(delta >= 1024 && length(s) > 1) { delta /= 1024; s=substr(s, 3) } printf "%s%.1f%s", sig, delta, substr(s, 1, 1) }')
-                        local remote_date; remote_date=$(date -d "$remote_created" +"%Y-%m-%d %H:%M")
-                        latest_stable_version="New build found (Created: $remote_date, Size Δ: ${human_readable_delta}B)"
+                        local remote_created; remote_created=$(jq -r '.Created // empty' <<< "$remote_inspect_output")
+                        local remote_size; remote_size=$(jq -r '.Size // empty' <<< "$remote_inspect_output")
+                        local remote_date_str="Unknown"
+                        if [ -n "$remote_created" ]; then
+                            remote_date_str=$(date -d "$remote_created" +"%Y-%m-%d %H:%M" 2>/dev/null || echo "$remote_created")
+                        fi
+                        latest_stable_version="New build found (Created: $remote_date_str"
+                        if [[ -n "$remote_size" && "$remote_size" =~ ^[0-9]+$ ]]; then
+                            local human_readable_remote_size
+                            human_readable_remote_size=$(awk -v size="$remote_size" 'BEGIN { s="B K M G T P E Z Y"; while(size >= 1024 && length(s) > 1) { size /= 1024; s=substr(s, 3) } printf "%.1f%s", size, substr(s, 1, 1) }')
+                            latest_stable_version+=", Size: ${human_readable_remote_size}"
+                        fi
+                        latest_stable_version+=")"
                     fi
                 fi
             fi
