@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.50 ---
+# --- v0.51 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -51,8 +51,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.50"
-VERSION_DATE="2025-09-18"
+VERSION="v0.51"
+VERSION_DATE="2025-09-23"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -765,9 +765,9 @@ check_for_updates() {
                 else
                     local remote_digest; remote_digest=$(jq -r '.Digest' <<< "$remote_inspect_output")
                     if [ "$remote_digest" != "$local_digest" ]; then
-                        local local_size; local_size=$(jq -r '.[0].Size' <<< "$local_inspect")
+                        local local_size; local_size=$(jq -r '.[0].Size // 0' <<< "$local_inspect")
                         local remote_created; remote_created=$(jq -r '.Created' <<< "$remote_inspect_output")
-                        local remote_size; remote_size=$(jq -r '.Size' <<< "$remote_inspect_output")
+                        local remote_size; remote_size=$(jq -r '.Size // 0' <<< "$remote_inspect_output")
                         local size_delta=$((remote_size - local_size))
                         local human_readable_delta; human_readable_delta=$(awk -v delta="$size_delta" 'BEGIN { s="B K M G T P E Z Y"; split(s, a); sig=delta<0?"-":"+"; delta=delta<0?-delta:delta; while(delta >= 1024 && length(s) > 1) { delta /= 1024; s=substr(s, 3) } printf "%s%.1f%s", sig, delta, substr(s, 1, 1) }')
                         local remote_date; remote_date=$(date -d "$remote_created" +"%Y-%m-%d %H:%M")
