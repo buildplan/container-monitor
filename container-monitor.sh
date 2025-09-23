@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.51 ---
+# --- v0.52 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -51,7 +51,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.51"
+VERSION="v0.52"
 VERSION_DATE="2025-09-23"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -215,23 +215,22 @@ load_configuration() {
 
 }
 print_help() {
-    local format="  %-64s %s\n"
-    printf "${COLOR_GREEN}Usage:${COLOR_RESET}\n"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}" "${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cached results and force a new update check${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}" "${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh summary${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh save logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}" "${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}"
-    printf "$format" "${COLOR_YELLOW}./container-monitor.sh --help [or -h]${COLOR_RESET}" "${COLOR_CYAN}- Show this help message${COLOR_RESET}"
-    printf "\n${COLOR_GREEN}Notes:${COLOR_RESET}\n"
-    printf "  ${COLOR_CYAN}- Environment variables (e.g., NOTIFICATION_CHANNEL) override config.yml${COLOR_RESET}\n"
-    printf "  ${COLOR_CYAN}- Dependencies: docker, jq, yq, skopeo, gawk, coreutils, wget${COLOR_RESET}\n"
+    printf '%bUsage:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}" "${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cached results and force a new update check${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}" "${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh summary${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh save logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}" "${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --help [or -h]${COLOR_RESET}" "${COLOR_CYAN}- Show this help message${COLOR_RESET}"
+    printf '\n%bNotes:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %b- Environment variables (e.g., NOTIFICATION_CHANNEL) override config.yml%b\n' "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- Dependencies: docker, jq, yq, skopeo, gawk, coreutils, wget%b\n' "$COLOR_CYAN" "$COLOR_RESET"
 }
 print_header_box() {
     local box_width=55
@@ -1411,7 +1410,7 @@ main() {
             local start_time; start_time=$(date +%s)
             mkfifo progress_pipe
             (
-                local spinner_chars=("|" "/" "-" '\')
+			    local spinner_chars=("|" "/" "-" "\\")
                 local spinner_idx=0
                 local processed=0
                 local total=${#CONTAINERS_TO_CHECK[@]}
