@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.51 ---
+# --- v0.52 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -51,7 +51,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.51"
+VERSION="v0.52"
 VERSION_DATE="2025-09-23"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -1410,7 +1410,7 @@ main() {
             local start_time; start_time=$(date +%s)
             mkfifo progress_pipe
             (
-                local spinner_chars=("|" "/" "-" '\')
+			    local spinner_chars=("|" "/" "-" "\\")
                 local spinner_idx=0
                 local processed=0
                 local total=${#CONTAINERS_TO_CHECK[@]}
