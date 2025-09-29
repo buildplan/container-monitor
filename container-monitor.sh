@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.53 ---
+# --- v0.60 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -32,11 +32,11 @@ set -uo pipefail
 #   ./container-monitor.sh --update                      - Choose which containers to update and recreate (pull and recreate container)
 #   ./container-monitor.sh --force-update                - Force update check in non-interactive mode (e.g., cron)
 #   ./container-monitor.sh --exclude=c1,c2               - Run on all containers, excluding specific ones.
-#   ./container-monitor.sh summary                       - Run all checks silently and show only the final summary.
-#   ./container-monitor.sh summary <c1> <c2> ...         - Summary mode for specific containers.
-#   ./container-monitor.sh logs                          - Show logs for all running containers
-#   ./container-monitor.sh logs <container> [pattern...] - Show logs for a container, with optional filtering (e.g., logs my-app error warn).
-#   ./container-monitor.sh save logs <container>         - Save logs for a specific container to a file
+#   ./container-monitor.sh --summary                       - Run all checks silently and show only the final summary.
+#   ./container-monitor.sh --summary <c1> <c2> ...         - Summary mode for specific containers.
+#   ./container-monitor.sh --logs                          - Show logs for all running containers
+#   ./container-monitor.sh --logs <container> [pattern...] - Show logs for a container, with optional filtering (e.g., logs my-app error warn).
+#   ./container-monitor.sh --save-logs <container>         - Save logs for a specific container to a file
 #   ./container-monitor.sh --prune                       - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --force                       - Bypass cache and force a new check for image updates
 #   ./container-monitor.sh --no-update                   - Run without checking for a script update.
@@ -51,7 +51,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.53"
+VERSION="v0.60"
 VERSION_DATE="2025-09-29"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -222,9 +222,9 @@ print_help() {
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cached results and force a new update check${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}" "${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh summary${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh save logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --summary [<c1> <c2>...]${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}" "${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --help [or -h]${COLOR_RESET}" "${COLOR_CYAN}- Show this help message${COLOR_RESET}"
@@ -698,7 +698,7 @@ check_network() {
             local interface data_part errors packets
             interface=$(echo "$line" | awk -F ':' '{print $1}' | sed 's/^[ \t]*//;s/[ \t]*$//')
             data_part=$(echo "$line" | cut -d':' -f2-)
-            read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
+            read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
             if ! [[ "$_r_errs" =~ ^[0-9]+$ && "$_t_drop" =~ ^[0-9]+$ ]]; then continue; fi
             errors=$((_r_errs + _t_drop))
             if [ "$errors" -gt "$NETWORK_ERROR_THRESHOLD" ]; then
@@ -1273,31 +1273,22 @@ perform_checks_for_container() {
 
 # --- Main Execution ---
 main() {
-    declare -a WARNING_OR_ERROR_CONTAINERS=()
-    declare -A CONTAINER_ISSUES_MAP
+    # --- Argument Parsing ---
     declare -a CONTAINER_ARGS=()
     declare -a CONTAINERS_TO_EXCLUDE=()
+    local ACTION="monitor" # Default action
+    local LOG_TARGET=""
+    declare -a LOG_PATTERNS=()
     local run_update_check=true
     local force_update_check=false
+
     while [ "$#" -gt 0 ]; do
         case "$1" in
+            # --- Behavior-modifying flags ---
             --exclude=*)
                 local EXCLUDE_STR="${1#*=}"
                 IFS=',' read -r -a CONTAINERS_TO_EXCLUDE <<< "$EXCLUDE_STR"
                 shift
-                ;;
-            --update)
-                RECREATE_MODE=true
-                INTERACTIVE_UPDATE_MODE=true
-                shift
-                ;;
-            --pull)
-                INTERACTIVE_UPDATE_MODE=true
-                shift
-                ;;
-            --prune)
-                run_prune
-                exit 0
                 ;;
             --force)
                 FORCE_UPDATE_CHECK=true
@@ -1311,10 +1302,46 @@ main() {
                 run_update_check=false
                 shift
                 ;;
-            summary)
+            --summary)
                 SUMMARY_ONLY_MODE=true
                 shift
                 ;;
+
+            # --- Action flags (only one can be used) ---
+            --update|--pull)
+                if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --update and --logs." "DANGER"; return 1; fi
+                ACTION="interactive-update"
+                if [[ "$1" == "--update" ]]; then RECREATE_MODE=true; fi
+                INTERACTIVE_UPDATE_MODE=true
+                shift
+                ;;
+            --prune)
+                if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --prune and --logs." "DANGER"; return 1; fi
+                ACTION="prune"
+                shift
+                ;;
+            --logs)
+                if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --logs and --update." "DANGER"; return 1; fi
+                ACTION="logs"
+                shift
+                if [[ -z "$1" || "$1" == --* ]]; then print_message "Error: --logs requires a container name." "DANGER"; return 1; fi
+                LOG_TARGET="$1"
+                shift
+                while [[ "$#" -gt 0 && ! "$1" =~ ^-- ]]; do
+                    LOG_PATTERNS+=("$1")
+                    shift
+                done
+                ;;
+            --save-logs)
+                 if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --save-logs and --update." "DANGER"; return 1; fi
+                 ACTION="save-logs"
+                 shift
+                 if [[ -z "$1" || "$1" == --* ]]; then print_message "Error: --save-logs requires a container name." "DANGER"; return 1; fi
+                 LOG_TARGET="$1"
+                 shift
+                ;;
+
+            # --- Help and Error Handling ---
             -h|--help)
                 print_help
                 return 0
@@ -1325,6 +1352,7 @@ main() {
                 return 1
                 ;;
             *)
+                # Collect container names for the default 'monitor' action
                 CONTAINER_ARGS+=("$1")
                 shift
                 ;;
@@ -1345,11 +1373,40 @@ main() {
             fi
         fi
     fi
-    # --- Mode Execution ---
-    if [ "$INTERACTIVE_UPDATE_MODE" = true ]; then
-        run_interactive_update_mode
-        return 0
-    fi
+
+    # --- Action Execution ---
+    case "$ACTION" in
+        "prune")
+            run_prune
+            ;;
+        "interactive-update")
+            run_interactive_update_mode
+            ;;
+        "logs")
+            if [ ${#LOG_PATTERNS[@]} -eq 0 ]; then
+                print_message "--- Showing all recent logs for '$LOG_TARGET' ---" "INFO"
+                docker logs --tail "$LOG_LINES_TO_CHECK" "$LOG_TARGET"
+            else
+                local egrep_pattern; egrep_pattern=$(IFS='|'; echo "${LOG_PATTERNS[*]}")
+                local filter_list; filter_list=$(printf "'%s' " "${LOG_PATTERNS[@]}")
+                print_message "--- Filtering logs for '$LOG_TARGET' with patterns: ${filter_list}---" "INFO"
+                docker logs --tail "$LOG_LINES_TO_CHECK" "$LOG_TARGET" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
+            fi
+            ;;
+        "save-logs")
+            save_logs "$LOG_TARGET"
+            ;;
+        "monitor")
+            perform_monitoring "${CONTAINER_ARGS[@]}"
+            ;;
+    esac
+}
+
+perform_monitoring() {
+    declare -a WARNING_OR_ERROR_CONTAINERS=()
+    declare -A CONTAINER_ISSUES_MAP
+    declare -a initial_containers=("$@")
+
     if [ "$SUMMARY_ONLY_MODE" = false ]; then
         if [ -t 1 ] && tput colors &>/dev/null && [ "$(tput colors)" -ge 8 ]; then
             print_header_box
@@ -1357,34 +1414,10 @@ main() {
             echo "--- Container Monitor ${VERSION} ---"
         fi
     fi
+
     declare -a CONTAINERS_TO_CHECK=()
-    if [ "${#CONTAINER_ARGS[@]}" -gt 0 ]; then
-        if [[ "${CONTAINER_ARGS[0]}" == "logs" && "$SUMMARY_ONLY_MODE" == false ]]; then
-            local container_to_log="${CONTAINER_ARGS[1]:-}"
-            if [ -z "$container_to_log" ]; then
-                print_message "Usage: $0 logs <container_name> [filter...]" "DANGER"; return 1;
-            fi
-            local filter_patterns=("${CONTAINER_ARGS[@]:2}")
-            if [ ${#filter_patterns[@]} -eq 0 ]; then
-                print_message "--- Showing all recent logs for '$container_to_log' ---" "INFO"
-                docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log"
-            else
-                local all_args_string="${filter_patterns[*]}"
-                local processed_args_string="${all_args_string//,/' '}"
-                local final_patterns=()
-                read -r -a final_patterns <<< "$processed_args_string"
-                local egrep_pattern
-                egrep_pattern=$(IFS='|'; echo "${final_patterns[*]}")
-                local filter_list
-                filter_list=$(printf "'%s' " "${final_patterns[@]}")
-                print_message "--- Filtering logs for '$container_to_log' with patterns: ${filter_list}---" "INFO"
-                docker logs --tail "$LOG_LINES_TO_CHECK" "$container_to_log" 2>&1 | grep -E -i --color=auto "$egrep_pattern"
-            fi
-            return 0
-        elif [[ "${CONTAINER_ARGS[0]}" == "save" && "${CONTAINER_ARGS[1]}" == "logs" && -n "${CONTAINER_ARGS[2]}" && "$SUMMARY_ONLY_MODE" == false ]]; then
-            save_logs "${CONTAINER_ARGS[2]}"; return 0;
-        fi
-        CONTAINERS_TO_CHECK=("${CONTAINER_ARGS[@]}")
+    if [ "${#initial_containers[@]}" -gt 0 ]; then
+        CONTAINERS_TO_CHECK=("${initial_containers[@]}")
     else
         local CONTAINER_NAMES_FROM_ENV; CONTAINER_NAMES_FROM_ENV=$(printenv CONTAINER_NAMES || true)
         if [ -n "$CONTAINER_NAMES_FROM_ENV" ]; then
@@ -1396,6 +1429,7 @@ main() {
             if [ ${#all_running_names[@]} -gt 0 ]; then CONTAINERS_TO_CHECK=("${all_running_names[@]}"); fi
         fi
     fi
+
     if [ ${#CONTAINERS_TO_EXCLUDE[@]} -gt 0 ]; then
         local temp_containers_to_check=()
         for container in "${CONTAINERS_TO_CHECK[@]}"; do
@@ -1408,7 +1442,6 @@ main() {
         CONTAINERS_TO_CHECK=("${temp_containers_to_check[@]}")
     fi
 
-    # --- Main Monitoring Logic ---
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
         if [ -f "$LOCK_FILE" ]; then
