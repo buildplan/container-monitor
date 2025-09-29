@@ -1324,7 +1324,11 @@ main() {
                 if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --logs and --update." "DANGER"; return 1; fi
                 ACTION="logs"
                 shift
-                if [[ -z "$1" || "$1" == --* ]]; then print_message "Error: --logs requires a container name." "DANGER"; return 1; fi
+                if [ "$#" -eq 0 ] || [[ "$1" == --* ]]; then
+                    print_message "Error: The --logs flag requires a container name." "DANGER"
+                    print_message "Example Usage: $0 --logs my-container error" "INFO"
+                    return 1
+                fi
                 LOG_TARGET="$1"
                 shift
                 while [[ "$#" -gt 0 && ! "$1" =~ ^-- ]]; do
