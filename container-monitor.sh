@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.52 ---
+# --- v0.53 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -51,8 +51,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.52"
-VERSION_DATE="2025-09-23"
+VERSION="v0.53"
+VERSION_DATE="2025-09-29"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1166,46 +1166,48 @@ run_interactive_update_mode() {
     print_message "Interactive update process finished." "INFO"
 }
 print_summary() {
-  local container_name_summary issues issue_emoji
-  local printed_containers=()
-  local host_disk_summary_output host_memory_summary_output
-  PRINT_MESSAGE_FORCE_STDOUT=true
-  print_message "-------------------------- Host System Stats ---------------------------" "SUMMARY"
-  host_disk_summary_output=$(check_host_disk_usage)
-  host_memory_summary_output=$(check_host_memory_usage)
-  print_message "$host_disk_summary_output" "SUMMARY"
-  print_message "$host_memory_summary_output" "SUMMARY"
-  if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
-    print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
-    print_message "The following containers have warnings or errors:" "SUMMARY"
-    for container_name_summary in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-    	local already_printed=0
-	for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
-    	if [[ "$already_printed" -eq 1 ]]; then continue; fi
-    	printed_containers+=("$container_name_summary")
-    	local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
-    	local emoji_string=""
-    	if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
-    	if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
-    	if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
-    	if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
-    	if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
-    	if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
-	if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
-    	if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
-    	print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
-    	IFS='|' read -r -a issue_array <<< "$issues"
-    	for issue_detail in "${issue_array[@]}"; do
-            print_message "  - ${issue_detail}" "WARNING"
-    	done
-    done
-  else
-    print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
-    print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
-  fi
-  print_message "------------------------------------------------------------------------" "SUMMARY"
-
-  PRINT_MESSAGE_FORCE_STDOUT=false # Reset the flag
+    local container_name_summary issues issue_emoji
+    local host_disk_summary_output host_memory_summary_output
+    PRINT_MESSAGE_FORCE_STDOUT=true
+    print_message "-------------------------- Host System Stats ---------------------------" "SUMMARY"
+    host_disk_summary_output=$(check_host_disk_usage)
+    host_memory_summary_output=$(check_host_memory_usage)
+    print_message "$host_disk_summary_output" "SUMMARY"
+    print_message "$host_memory_summary_output" "SUMMARY"
+    if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+        print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
+        print_message "The following containers have warnings or errors:" "SUMMARY"
+        local -A seen_containers
+        local unique_containers=()
+        for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+            if [[ -z "${seen_containers[$container]}" ]]; then
+                unique_containers+=("$container")
+                seen_containers["$container"]=1
+            fi
+        done
+        for container_name_summary in "${unique_containers[@]}"; do
+            local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
+            local emoji_string=""
+            if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
+            if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
+            if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
+            if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
+            if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
+            if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
+            if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
+            if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
+            print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
+            IFS='|' read -r -a issue_array <<< "$issues"
+            for issue_detail in "${issue_array[@]}"; do
+                print_message "  - ${issue_detail}" "WARNING"
+            done
+        done
+    else
+        print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
+        print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
+    fi
+    print_message "------------------------------------------------------------------------" "SUMMARY"
+    PRINT_MESSAGE_FORCE_STDOUT=false
 }
 perform_checks_for_container() {
     local container_name_or_id="$1"
