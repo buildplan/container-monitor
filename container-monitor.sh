@@ -1180,7 +1180,7 @@ print_summary() {
         local -A seen_containers
         local unique_containers=()
         for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-            if [[ -z "${seen_containers[$container]}" ]]; then
+		    if ! [[ -v seen_containers[$container] ]]; then
                 unique_containers+=("$container")
                 seen_containers["$container"]=1
             fi
