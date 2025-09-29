@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.60 ---
+# --- v0.61 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -27,6 +27,7 @@ set -uo pipefail
 #
 # Usage:
 #   ./container-monitor.sh                               - Monitor based on config (or all running)
+#   ./container-monitor.sh --check-setup                 - Check the script setup and dependencies.
 #   ./container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./container-monitor.sh --pull                        - Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                      - Choose which containers to update and recreate (pull and recreate container)
@@ -51,7 +52,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.60"
+VERSION="v0.61"
 VERSION_DATE="2025-09-29"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -217,6 +218,7 @@ load_configuration() {
 print_help() {
     printf '%bUsage:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}" "${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --check-setup${COLOR_RESET}" "${COLOR_CYAN}- Check the script setup and dependencies.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
@@ -410,6 +412,68 @@ check_and_install_dependencies() {
     fi
     if [ ${#missing_pkgs[@]} -eq 0 ] && command -v yq &>/dev/null; then
         print_message "All required dependencies are installed." "GOOD"
+    fi
+}
+run_setup_check() {
+    print_message "--- Running Setup & Dependency Check ---" "INFO"
+    local all_ok=true
+
+    # 1. Check for system packages (docker, jq, etc.)
+    local missing_pkgs=()
+    declare -A deps=( [docker]=docker [jq]=jq [skopeo]=skopeo [awk]=gawk [timeout]=coreutils [wget]=wget )
+    for cmd in "${!deps[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_pkgs+=("${deps[$cmd]}")
+        fi
+    done
+
+    if [ ${#missing_pkgs[@]} -gt 0 ]; then
+        print_message "✖ System dependencies missing: ${missing_pkgs[*]}" "DANGER"
+        all_ok=false
+    else
+        print_message "✔ System dependencies are installed." "GOOD"
+    fi
+
+    # 2. Check yq status (installed and up-to-date)
+    if ! command -v yq &>/dev/null; then
+        print_message "✖ yq is not installed. It's a required dependency." "DANGER"
+        all_ok=false
+    else
+        local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
+        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+        if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
+            print_message "❕ yq has an update available: ${latest_yq_tag} (you have ${local_yq_version})." "WARNING"
+            print_message "  Run the script manually to get an update prompt." "INFO"
+        else
+            print_message "✔ yq is up-to-date (version ${local_yq_version})." "GOOD"
+        fi
+    fi
+
+    # 3. Check for script update
+    local latest_version; latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+    if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
+        print_message "❕ This script has an update available: ${latest_version} (you have ${VERSION})." "WARNING"
+        print_message "  Run the script manually to get an update prompt." "INFO"
+    else
+        print_message "✔ Script is up-to-date (version ${VERSION})." "GOOD"
+    fi
+
+    # 4. Check config.yml
+    _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
+    if [ ! -f "$_CONFIG_FILE_PATH" ]; then
+        print_message "❕ config.yml not found. The script will use default values." "WARNING"
+    elif ! yq e '.' "$_CONFIG_FILE_PATH" >/dev/null 2>&1; then
+        print_message "✖ config.yml has invalid syntax." "DANGER"
+        all_ok=false
+    else
+        print_message "✔ config.yml found and has valid syntax." "GOOD"
+    fi
+    echo
+    if [ "$all_ok" = true ]; then
+        print_message "Setup check passed. The script is ready to run." "GOOD"
+    else
+        print_message "Setup check failed. Please address the errors (✖) above." "DANGER"
+        return 1
     fi
 }
 print_message() {
@@ -1308,6 +1372,11 @@ main() {
                 ;;
 
             # --- Action flags (only one can be used) ---
+            --check-setup)
+                if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions." "DANGER"; return 1; fi
+                ACTION="check-setup"
+                shift
+                ;;
             --update|--pull)
                 if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --update and --logs." "DANGER"; return 1; fi
                 ACTION="interactive-update"
@@ -1380,6 +1449,9 @@ main() {
 
     # --- Action Execution ---
     case "$ACTION" in
+        "check-setup")
+            run_setup_check
+            ;;
         "prune")
             run_prune
             ;;
