@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.52 ---
+# --- v0.53 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -51,8 +51,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.52"
-VERSION_DATE="2025-09-23"
+VERSION="v0.53"
+VERSION_DATE="2025-09-29"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -276,7 +276,6 @@ print_header_box() {
 check_and_install_dependencies() {
     local missing_pkgs=()
     local manual_install_needed=false
-    local yq_missing=false
     local pkg_manager=""
     local arch=""
     if command -v apt-get &>/dev/null; then
@@ -303,9 +302,6 @@ check_and_install_dependencies() {
         print_message "Docker is not installed. This is a critical dependency. Please follow the official instructions at https://docs.docker.com/engine/install/" "DANGER"
         manual_install_needed=true
     fi
-    if ! command -v yq &>/dev/null; then
-        yq_missing=true
-    fi
     for cmd in "${!deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             missing_pkgs+=("${deps[$cmd]}")
@@ -318,20 +314,17 @@ check_and_install_dependencies() {
                 read -rp "Would you like to attempt to install them now? (y/n): " response
                 if [[ "$response" =~ ^[yY]$ ]]; then
                     print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
+                    local install_cmd=()
                     if [ "$pkg_manager" == "apt" ]; then
-                        if sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"; then
-                            print_message "Package manager dependencies installed successfully." "GOOD"
-                        else
-                            print_message "Failed to install dependencies. Please install them manually." "DANGER"
-                            manual_install_needed=true
-                        fi
+                       sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
                     else
-                        if sudo "$pkg_manager" install -y "${missing_pkgs[@]}"; then
-                            print_message "Package manager dependencies installed successfully." "GOOD"
-                        else
-                            print_message "Failed to install dependencies. Please install them manually." "DANGER"
-                            manual_install_needed=true
-                        fi
+                       sudo "$pkg_manager" install -y "${missing_pkgs[@]}"
+                    fi
+                    if [ $? -eq 0 ]; then
+                        print_message "Package manager dependencies installed successfully." "GOOD"
+                    else
+                        print_message "Failed to install dependencies. Please install them manually." "DANGER"
+                        manual_install_needed=true
                     fi
                 else
                     print_message "Installation cancelled. Please install dependencies manually." "DANGER"
@@ -346,37 +339,77 @@ check_and_install_dependencies() {
             manual_install_needed=true
         fi
     fi
-    if [ "$yq_missing" = true ]; then
+    _install_yq() {
+        local arch_to_install="$1"
+        local tag_to_install="$2"
+        print_message "Attempting to download yq... You may be prompted for your password." "INFO"
+        if [ -z "$tag_to_install" ]; then
+             tag_to_install=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+        fi
+        if [ -z "$tag_to_install" ]; then
+            print_message "Failed to get the latest yq version tag from GitHub." "DANGER"
+            return 1
+        fi
+        local yq_url="https://github.com/mikefarah/yq/releases/download/${tag_to_install}/yq_linux_${arch_to_install}"
+        if sudo wget "$yq_url" -O /usr/bin/yq && sudo chmod +x /usr/bin/yq; then
+            print_message "yq installed/updated successfully to ${tag_to_install}." "GOOD"
+            return 0
+        else
+            print_message "Failed to download or install yq. Please do so manually." "DANGER"
+            return 1
+        fi
+    }
+    if ! command -v yq &>/dev/null; then
         print_message "yq is not installed. It is required for parsing config.yml." "DANGER"
         if [ "$arch" == "unsupported" ]; then
-             print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually from https://github.com/mikefarah/yq/" "DANGER"
-             manual_install_needed=true
+            print_message "Your system architecture ($(uname -m)) is not supported for automatic yq installation. Please install it manually." "DANGER"
+            manual_install_needed=true
         elif [ -t 0 ]; then
             read -rp "Would you like to download the latest version for your architecture ($arch) now? (y/n): " response
             if [[ "$response" =~ ^[yY]$ ]]; then
-                print_message "Attempting to download yq with 'sudo wget'... You may be prompted for your password." "INFO"
-                local yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch}"
-                if sudo wget "$yq_url" -O /usr/bin/yq && sudo chmod +x /usr/bin/yq; then
-                    print_message "yq installed successfully to /usr/bin/yq." "GOOD"
-                else
-                    print_message "Failed to download or install yq. Please install it manually." "DANGER"
+                if ! _install_yq "$arch" ""; then
                     manual_install_needed=true
                 fi
             else
-                print_message "Installation cancelled. Please install yq manually." "DANGER"
+                print_message "Installation cancelled. The script requires yq to function." "DANGER"
                 manual_install_needed=true
             fi
         else
-            print_message "Cannot install interactively. Please install yq manually." "DANGER"
+            print_message "yq is missing. Cannot install interactively. Please install it manually." "DANGER"
             manual_install_needed=true
+        fi
+    else
+        print_message "Checking for yq updates..." "INFO"
+        local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
+        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+
+        if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
+            local update_msg="A new version of yq is available: ${latest_yq_tag} (you have ${local_yq_version})."
+            print_message "$update_msg" "WARNING"
+            if [ -t 0 ]; then
+                read -rp "Would you like to update yq now? (y/n): " response
+                if [[ "$response" =~ ^[yY]$ ]]; then
+                    _install_yq "$arch" "$latest_yq_tag"
+                else
+                    print_message "yq update skipped. Continuing with old version." "INFO"
+                fi
+            else
+                print_message "To update, run the script manually from your terminal." "INFO"
+                local notif_title="⚠️ Dependency Update Recommended on $(hostname)"
+                send_notification "$update_msg" "$notif_title"
+            fi
+        elif [ -n "$local_yq_version" ]; then
+            print_message "yq is up-to-date (version ${local_yq_version})." "GOOD"
+        else
+            print_message "Could not determine local yq version. Skipping update check." "WARNING"
         fi
     fi
     if [ "$manual_install_needed" = true ]; then
         print_message "Please address the missing dependencies listed above before running the script again." "DANGER"
         exit 1
     fi
-    if ! $yq_missing && [ ${#missing_pkgs[@]} -eq 0 ]; then
-         print_message "All required dependencies are installed." "GOOD"
+    if [ ${#missing_pkgs[@]} -eq 0 ] && command -v yq &>/dev/null; then
+        print_message "All required dependencies are installed." "GOOD"
     fi
 }
 print_message() {
@@ -1141,46 +1174,48 @@ run_interactive_update_mode() {
     print_message "Interactive update process finished." "INFO"
 }
 print_summary() {
-  local container_name_summary issues issue_emoji
-  local printed_containers=()
-  local host_disk_summary_output host_memory_summary_output
-  PRINT_MESSAGE_FORCE_STDOUT=true
-  print_message "-------------------------- Host System Stats ---------------------------" "SUMMARY"
-  host_disk_summary_output=$(check_host_disk_usage)
-  host_memory_summary_output=$(check_host_memory_usage)
-  print_message "$host_disk_summary_output" "SUMMARY"
-  print_message "$host_memory_summary_output" "SUMMARY"
-  if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
-    print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
-    print_message "The following containers have warnings or errors:" "SUMMARY"
-    for container_name_summary in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-    	local already_printed=0
-	for pc in "${printed_containers[@]}"; do if [[ "$pc" == "$container_name_summary" ]]; then already_printed=1; break; fi; done
-    	if [[ "$already_printed" -eq 1 ]]; then continue; fi
-    	printed_containers+=("$container_name_summary")
-    	local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
-    	local emoji_string=""
-    	if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
-    	if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
-    	if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
-    	if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
-    	if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
-    	if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
-	if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
-    	if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
-    	print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
-    	IFS='|' read -r -a issue_array <<< "$issues"
-    	for issue_detail in "${issue_array[@]}"; do
-            print_message "  - ${issue_detail}" "WARNING"
-    	done
-    done
-  else
-    print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
-    print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
-  fi
-  print_message "------------------------------------------------------------------------" "SUMMARY"
-
-  PRINT_MESSAGE_FORCE_STDOUT=false # Reset the flag
+    local container_name_summary issues issue_emoji
+    local host_disk_summary_output host_memory_summary_output
+    PRINT_MESSAGE_FORCE_STDOUT=true
+    print_message "-------------------------- Host System Stats ---------------------------" "SUMMARY"
+    host_disk_summary_output=$(check_host_disk_usage)
+    host_memory_summary_output=$(check_host_memory_usage)
+    print_message "$host_disk_summary_output" "SUMMARY"
+    print_message "$host_memory_summary_output" "SUMMARY"
+    if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+        print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
+        print_message "The following containers have warnings or errors:" "SUMMARY"
+        local -A seen_containers
+        local unique_containers=()
+        for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+		    if ! [[ -v seen_containers[$container] ]]; then
+                unique_containers+=("$container")
+                seen_containers["$container"]=1
+            fi
+        done
+        for container_name_summary in "${unique_containers[@]}"; do
+            local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
+            local emoji_string=""
+            if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
+            if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
+            if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
+            if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
+            if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
+            if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
+            if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
+            if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
+            print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
+            IFS='|' read -r -a issue_array <<< "$issues"
+            for issue_detail in "${issue_array[@]}"; do
+                print_message "  - ${issue_detail}" "WARNING"
+            done
+        done
+    else
+        print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
+        print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
+    fi
+    print_message "------------------------------------------------------------------------" "SUMMARY"
+    PRINT_MESSAGE_FORCE_STDOUT=false
 }
 perform_checks_for_container() {
     local container_name_or_id="$1"
