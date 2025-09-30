@@ -389,16 +389,14 @@ check_and_install_dependencies() {
                 local api_url="https://api.github.com/repos/mikefarah/yq/releases/tags/${latest_yq_tag}"
                 local release_notes
                 release_notes=$(curl -sL "$api_url" | jq -r '.body // "Could not retrieve release notes."')
-
                 echo
                 print_message "A new version of yq is available!" "WARNING"
                 echo -e "  ${COLOR_CYAN}Current Version:${COLOR_RESET} $local_yq_version"
                 echo -e "  ${COLOR_GREEN}New Version:    ${COLOR_RESET} $latest_yq_tag"
                 echo
                 echo -e "  ${COLOR_YELLOW}Release Notes for ${latest_yq_tag}:${COLOR_RESET}"
-                echo "$release_notes" | sed 's/^/    /'
+                echo -e "    ${release_notes//$'\n'/$'\n'    }"
                 echo
-
                 read -rp "Would you like to update yq now? (y/n): " response
                 if [[ "$response" =~ ^[yY]$ ]]; then
                     _install_yq "$arch" "$latest_yq_tag"
@@ -623,7 +621,7 @@ self_update() {
     echo -e "  ${COLOR_GREEN}New Version:    ${COLOR_RESET} $latest_version"
     echo
     echo -e "  ${COLOR_YELLOW}Release Notes for ${latest_version}:${COLOR_RESET}"
-    echo "$release_notes" | sed 's/^/    /'
+    echo -e "    ${release_notes//$'\n'/$'\n'    }"
     echo
     read -rp "Would you like to update now? (y/n): " response
     if [[ ! "$response" =~ ^[yY]$ ]]; then
@@ -657,7 +655,6 @@ self_update() {
         exit 1
     fi
     print_message "Checksum verified successfully." "GOOD"
-
     print_message "Checking script syntax..." "INFO"
     if ! bash -n "$temp_script"; then
         print_message "Downloaded file is not a valid script. Update aborted." "DANGER"
