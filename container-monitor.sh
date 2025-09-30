@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
+export LC_ALL=C
 
-# --- v0.62 ---
+# --- v0.63 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -52,7 +53,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.62"
+VERSION="v0.63"
 VERSION_DATE="2025-09-30"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -802,7 +803,7 @@ check_network() {
 }
 get_update_strategy() {
     local image_name="$1"
-    local service_name="${image_name##*/}" 
+    local service_name="${image_name##*/}"
     local strategy=""
     strategy=$(yq e ".containers.update_strategies.\"$image_name\" // \"\"" "$SCRIPT_DIR/config.yml" 2>/dev/null)
     if [ -z "$strategy" ] && [ "$image_name" != "$service_name" ]; then
@@ -1092,6 +1093,14 @@ pull_new_image() {
         print_message "Failed to pull new image for '$container_name_to_update'." "DANGER"
     fi
 }
+is_rolling_tag() {
+    local image_ref="$1"
+    if [[ "$image_ref" =~ :(latest|stable|rolling|dev|edge|nightly)(-.+)?$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
 process_container_update() {
     local container_name="$1"
     local update_details="$2"
@@ -1112,7 +1121,7 @@ process_container_update() {
         IFS=',' read -r -a files_array <<< "$config_files"
         for file in "${files_array[@]}"; do compose_cmd_base+=("-f" "$file"); done
     fi
-    if [[ "$update_details" == *"New build found"* ]]; then
+    if is_rolling_tag "$current_image_ref"; then
         print_message "Image uses a rolling tag. Proceeding with standard pull and recreate." "INFO"
         (
             cd "$working_dir" || exit 1
