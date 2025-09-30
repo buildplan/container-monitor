@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.63 ---
+# --- v0.70 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,7 +53,7 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.63"
+VERSION="v0.70"
 VERSION_DATE="2025-09-30"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -114,6 +114,7 @@ NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 CONTAINER_NAMES=""
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
+declare -a CONTAINERS_TO_EXCLUDE_FROM_UPDATES=()
 
 # --- Functions ---
 load_configuration() {
@@ -214,7 +215,9 @@ load_configuration() {
     if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
-
+    if [ -f "$_CONFIG_FILE_PATH" ]; then
+        mapfile -t CONTAINERS_TO_EXCLUDE_FROM_UPDATES < <(yq e '.containers.exclude.updates[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+    fi
 }
 print_help() {
     printf '%bUsage:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -818,6 +821,12 @@ get_update_strategy() {
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
     local state_json="$3"
+    for excluded_container in "${CONTAINERS_TO_EXCLUDE_FROM_UPDATES[@]}"; do
+        if [[ "$container_name" == "$excluded_container" ]]; then
+            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Skipping for '$container_name' (on exclude list)." "INFO" >&2
+            return 0
+        fi
+    done
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
     if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
