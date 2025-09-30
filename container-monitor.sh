@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# --- v0.61 ---
+# --- v0.62 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -52,8 +52,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.61"
-VERSION_DATE="2025-09-29"
+VERSION="v0.62"
+VERSION_DATE="2025-09-30"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -384,11 +384,19 @@ check_and_install_dependencies() {
         print_message "Checking for yq updates..." "INFO"
         local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
         local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
-
         if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
-            local update_msg="A new version of yq is available: ${latest_yq_tag} (you have ${local_yq_version})."
-            print_message "$update_msg" "WARNING"
             if [ -t 0 ]; then
+                local api_url="https://api.github.com/repos/mikefarah/yq/releases/tags/${latest_yq_tag}"
+                local release_notes
+                release_notes=$(curl -sL "$api_url" | jq -r '.body // "Could not retrieve release notes."')
+                echo
+                print_message "A new version of yq is available!" "WARNING"
+                echo -e "  ${COLOR_CYAN}Current Version:${COLOR_RESET} $local_yq_version"
+                echo -e "  ${COLOR_GREEN}New Version:    ${COLOR_RESET} $latest_yq_tag"
+                echo
+                echo -e "  ${COLOR_YELLOW}Release Notes for ${latest_yq_tag}:${COLOR_RESET}"
+                echo -e "    ${release_notes//$'\n'/$'\n'    }"
+                echo
                 read -rp "Would you like to update yq now? (y/n): " response
                 if [[ "$response" =~ ^[yY]$ ]]; then
                     _install_yq "$arch" "$latest_yq_tag"
@@ -396,6 +404,8 @@ check_and_install_dependencies() {
                     print_message "yq update skipped. Continuing with old version." "INFO"
                 fi
             else
+                local update_msg="A new version of yq is available: ${latest_yq_tag} (you have ${local_yq_version})."
+                print_message "$update_msg" "WARNING"
                 print_message "To update, run the script manually from your terminal." "INFO"
                 local notif_title="⚠️ Dependency Update Recommended on $(hostname)"
                 send_notification "$update_msg" "$notif_title"
@@ -595,10 +605,28 @@ send_notification() {
     esac
 }
 self_update() {
-    echo "A new version of this script is available. Would you like to update now? (y/n)"
-    read -r response
+    local latest_version="$1"
+    local repo_owner="buildplan"
+    local repo_name="container-monitor"
+    local api_url="https://api.github.com/repos/${repo_owner}/${repo_name}/releases/tags/${latest_version}"
+    local release_notes
+    if command -v jq &>/dev/null; then
+        release_notes=$(curl -sL "$api_url" | jq -r '.body // "Could not retrieve release notes."')
+    else
+        release_notes="jq is not installed, cannot fetch release notes."
+    fi
+    echo
+    print_message "A new version of the script is available!" "INFO"
+    echo -e "  ${COLOR_CYAN}Current Version:${COLOR_RESET} $VERSION"
+    echo -e "  ${COLOR_GREEN}New Version:    ${COLOR_RESET} $latest_version"
+    echo
+    echo -e "  ${COLOR_YELLOW}Release Notes for ${latest_version}:${COLOR_RESET}"
+    echo -e "    ${release_notes//$'\n'/$'\n'    }"
+    echo
+    read -rp "Would you like to update now? (y/n): " response
     if [[ ! "$response" =~ ^[yY]$ ]]; then
         UPDATE_SKIPPED=true
+        print_message "Update skipped by user." "INFO"
         return
     fi
     local temp_dir
@@ -627,7 +655,6 @@ self_update() {
         exit 1
     fi
     print_message "Checksum verified successfully." "GOOD"
-
     print_message "Checking script syntax..." "INFO"
     if ! bash -n "$temp_script"; then
         print_message "Downloaded file is not a valid script. Update aborted." "DANGER"
@@ -1442,7 +1469,7 @@ main() {
             local latest_version
             latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
             if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
-                self_update
+                self_update "$latest_version"
             fi
         fi
     fi
