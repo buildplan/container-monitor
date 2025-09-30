@@ -1121,7 +1121,7 @@ process_container_update() {
         IFS=',' read -r -a files_array <<< "$config_files"
         for file in "${files_array[@]}"; do compose_cmd_base+=("-f" "$file"); done
     fi
-    if is_rolling_tag "$current_image_ref"; then
+    if is_rolling_tag "$current_image_ref" || [[ "$update_details" == *"New build found"* ]]; then
         print_message "Image uses a rolling tag. Proceeding with standard pull and recreate." "INFO"
         (
             cd "$working_dir" || exit 1
