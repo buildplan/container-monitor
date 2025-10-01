@@ -1601,7 +1601,7 @@ perform_monitoring() {
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
-               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
