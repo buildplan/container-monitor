@@ -100,3 +100,10 @@ containers:
     # How it works: If your current tag is '7.1.5', it will look for any newer tags
     # that start with '7.' (e.g., '7.2.0' or '7.1.6').
     # some-specific-app: "major-lock"
+
+
+  # Exclude specific containers from the update check
+  exclude:
+    updates:
+      - my-local-app-1     # Name of your locally built container
+      - my-backend-api     # Any other you want to skip

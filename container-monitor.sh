@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.63 ---
+# --- v0.70 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,7 +53,7 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.63"
+VERSION="v0.70"
 VERSION_DATE="2025-09-30"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -214,26 +214,46 @@ load_configuration() {
     if [ -z "$CONTAINER_NAMES" ] && [ -f "$_CONFIG_FILE_PATH" ]; then
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
-
+    if [ -f "$_CONFIG_FILE_PATH" ]; then
+        local temp_exclude_array=()
+        mapfile -t temp_exclude_array < <(yq e '.containers.exclude.updates[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+        EXCLUDE_UPDATES_LIST_STR=$(IFS=,; echo "${temp_exclude_array[*]}")
+        export EXCLUDE_UPDATES_LIST_STR
+    fi
 }
 print_help() {
     printf '%bUsage:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}" "${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --check-setup${COLOR_RESET}" "${COLOR_CYAN}- Check the script setup and dependencies.${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cached results and force a new update check${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}" "${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --summary [<c1> <c2>...]${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}" "${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --help [or -h]${COLOR_RESET}" "${COLOR_CYAN}- Show this help message${COLOR_RESET}"
-    printf '\n%bNotes:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
-    printf '  %b- Environment variables (e.g., NOTIFICATION_CHANNEL) override config.yml%b\n' "$COLOR_CYAN" "$COLOR_RESET"
-    printf '  %b- Dependencies: docker, jq, yq, skopeo, gawk, coreutils, wget%b\n' "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh [options] [container...]" "${COLOR_CYAN}- Run monitoring on named or configured containers.${COLOR_RESET}"
+
+    printf '\n%bActions:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers with updates.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images only (no recreation).${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--summary [container...]${COLOR_RESET}" "${COLOR_CYAN}- Show only the final summary report, hiding individual checks.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show recent logs for a container, with optional text filters.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save a container's full logs to a timestamped file.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune command interactively.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--check-setup${COLOR_RESET}" "${COLOR_CYAN}- Verify dependencies and script configuration.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}-h, --help${COLOR_RESET}" "${COLOR_CYAN}- Show this help message.${COLOR_RESET}"
+
+    printf '\n%bModifiers:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--exclude=<c1,c2,...>${COLOR_RESET}" "${COLOR_CYAN}- Exclude specified containers from all checks.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cache for image update checks (force live check).${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--force-update${COLOR_RESET}" "${COLOR_CYAN}- Force prompt for script self-update even if unattended.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--no-update${COLOR_RESET}" "${COLOR_CYAN}- Skip script self-update check this run.${COLOR_RESET}"
+
+    printf '\n%bConfiguration & Notes:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %b- Config loaded as: defaults -> %bconfig.yml%b -> environment variables.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- To skip only image update checks, use the %bexclude%b section in %bconfig.yml%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- Dependencies: %bdocker, jq, yq, skopeo, gawk, coreutils (timeout), wget%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- For automation (cron), avoid interactive flags: --pull, --update, --prune.%b\n' "$COLOR_CYAN" "$COLOR_RESET"
+
+    printf '\n%bExamples:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %bMonitor specific containers with summary:%b\n' "$COLOR_YELLOW" "$COLOR_RESET"
+    printf '    ./container-monitor.sh --summary nginx myapp\n\n'
+    printf '  %bShow logs with filter patterns:%b\n' "$COLOR_YELLOW" "$COLOR_RESET"
+    printf '    ./container-monitor.sh --logs myapp error warn\n\n'
+    printf '  %bSkip update checks for local containers via config.yml:%b\n' "$COLOR_YELLOW" "$COLOR_RESET"
+    printf '    containers:\n      exclude:\n        updates:\n          - mylocalapp\n          - another-build\n'
 }
 print_header_box() {
     local box_width=55
@@ -818,9 +838,26 @@ get_update_strategy() {
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
     local state_json="$3"
+
+    local excluded_from_updates=()
+    if [ -n "${EXCLUDE_UPDATES_LIST_STR:-}" ]; then
+        IFS=',' read -r -a excluded_from_updates <<< "$EXCLUDE_UPDATES_LIST_STR"
+    fi
+
+    for excluded_container in "${excluded_from_updates[@]}"; do
+        if [[ "$container_name" == "$excluded_container" ]]; then
+            print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Skipping for '$container_name' (on exclude list)." "INFO" >&2
+            return 0
+        fi
+    done
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
     if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
+    fi
+    local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
+    if ! jq -e '.[0].RepoDigests and (.[0].RepoDigests | length) > 0' <<< "$local_inspect" >/dev/null 2>&1; then
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Skipping '$container_name' (local or non-registry image)." "INFO" >&2
+        return 0
     fi
     local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g')
     if [ "$FORCE_UPDATE_CHECK" = false ]; then
@@ -876,7 +913,6 @@ check_for_updates() {
     local error_message=""
     case "$strategy" in
         "digest")
-            local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
             local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
             if [ -z "$local_digest" ]; then
                 error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
@@ -1584,7 +1620,7 @@ perform_monitoring() {
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
-               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
