@@ -825,7 +825,7 @@ check_for_updates() {
     local state_json="$3"
 
     local excluded_from_updates=()
-    if [ -n "$EXCLUDE_UPDATES_LIST_STR" ]; then
+    if [ -n "${EXCLUDE_UPDATES_LIST_STR:-}" ]; then
         IFS=',' read -r -a excluded_from_updates <<< "$EXCLUDE_UPDATES_LIST_STR"
     fi
 
@@ -838,6 +838,11 @@ check_for_updates() {
     if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
     if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
+    fi
+    local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
+    if ! jq -e '.[0].RepoDigests and (.[0].RepoDigests | length) > 0' <<< "$local_inspect" >/dev/null 2>&1; then
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Skipping '$container_name' (local or non-registry image)." "INFO" >&2
+        return 0
     fi
     local cache_key; cache_key=$(echo "$current_image_ref" | sed 's/[/:]/_/g')
     if [ "$FORCE_UPDATE_CHECK" = false ]; then
@@ -893,7 +898,6 @@ check_for_updates() {
     local error_message=""
     case "$strategy" in
         "digest")
-            local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
             local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
             if [ -z "$local_digest" ]; then
                 error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
