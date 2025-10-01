@@ -114,7 +114,6 @@ NTFY_TOPIC="$_SCRIPT_DEFAULT_NTFY_TOPIC"
 NTFY_ACCESS_TOKEN="$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
 CONTAINER_NAMES=""
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
-declare -a CONTAINERS_TO_EXCLUDE_FROM_UPDATES=()
 
 # --- Functions ---
 load_configuration() {
@@ -216,7 +215,10 @@ load_configuration() {
         mapfile -t CONTAINER_NAMES_FROM_CONFIG_FILE < <(yq e '.containers.monitor_defaults[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     fi
     if [ -f "$_CONFIG_FILE_PATH" ]; then
-        mapfile -t CONTAINERS_TO_EXCLUDE_FROM_UPDATES < <(yq e '.containers.exclude.updates[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+        local temp_exclude_array=()
+        mapfile -t temp_exclude_array < <(yq e '.containers.exclude.updates[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+        EXCLUDE_UPDATES_LIST_STR=$(IFS=,; echo "${temp_exclude_array[*]}")
+        export EXCLUDE_UPDATES_LIST_STR
     fi
 }
 print_help() {
@@ -821,7 +823,13 @@ get_update_strategy() {
 check_for_updates() {
     local container_name="$1"; local current_image_ref="$2"
     local state_json="$3"
-    for excluded_container in "${CONTAINERS_TO_EXCLUDE_FROM_UPDATES[@]}"; do
+
+    local excluded_from_updates=()
+    if [ -n "$EXCLUDE_UPDATES_LIST_STR" ]; then
+        IFS=',' read -r -a excluded_from_updates <<< "$EXCLUDE_UPDATES_LIST_STR"
+    fi
+
+    for excluded_container in "${excluded_from_updates[@]}"; do
         if [[ "$container_name" == "$excluded_container" ]]; then
             print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Skipping for '$container_name' (on exclude list)." "INFO" >&2
             return 0
