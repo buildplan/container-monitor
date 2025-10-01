@@ -223,22 +223,37 @@ load_configuration() {
 }
 print_help() {
     printf '%bUsage:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh${COLOR_RESET}" "${COLOR_CYAN}- Monitor based on config (or all running)${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --check-setup${COLOR_RESET}" "${COLOR_CYAN}- Check the script setup and dependencies.${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh <container1> <container2> ...${COLOR_RESET}" "${COLOR_CYAN}- Monitor specific containers${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images for containers${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cached results and force a new update check${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --exclude=c1,c2${COLOR_RESET}" "${COLOR_CYAN}- Run on all containers, excluding specific ones${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --summary [<c1> <c2>...]${COLOR_RESET}" "${COLOR_CYAN}- Run checks silently and show only summary${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show logs for a container, with optional filters${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save logs for a specific container to a file${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune to clean up resources${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --no-update${COLOR_RESET}" "${COLOR_CYAN}- Run without checking for a script update${COLOR_RESET}"
-    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh --help [or -h]${COLOR_RESET}" "${COLOR_CYAN}- Show this help message${COLOR_RESET}"
-    printf '\n%bNotes:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
-    printf '  %b- Environment variables (e.g., NOTIFICATION_CHANNEL) override config.yml%b\n' "$COLOR_CYAN" "$COLOR_RESET"
-    printf '  %b- Dependencies: docker, jq, yq, skopeo, gawk, coreutils, wget%b\n' "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}./container-monitor.sh [options] [container...]" "${COLOR_CYAN}- Run monitoring on named or configured containers.${COLOR_RESET}"
+
+    printf '\n%bActions:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers with updates.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images only (no recreation).${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--summary [container...]${COLOR_RESET}" "${COLOR_CYAN}- Show only the final summary report, hiding individual checks.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show recent logs for a container, with optional text filters.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save a container's full logs to a timestamped file.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune command interactively.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--check-setup${COLOR_RESET}" "${COLOR_CYAN}- Verify dependencies and script configuration.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}-h, --help${COLOR_RESET}" "${COLOR_CYAN}- Show this help message.${COLOR_RESET}"
+
+    printf '\n%bModifiers:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--exclude=<c1,c2,...>${COLOR_RESET}" "${COLOR_CYAN}- Exclude specified containers from all checks.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--force${COLOR_RESET}" "${COLOR_CYAN}- Bypass cache for image update checks (force live check).${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--force-update${COLOR_RESET}" "${COLOR_CYAN}- Force prompt for script self-update even if unattended.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--no-update${COLOR_RESET}" "${COLOR_CYAN}- Skip script self-update check this run.${COLOR_RESET}"
+
+    printf '\n%bConfiguration & Notes:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %b- Config loaded as: defaults -> %bconfig.yml%b -> environment variables.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- To skip only image update checks, use the %bexclude%b section in %bconfig.yml%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- Dependencies: %bdocker, jq, yq, skopeo, gawk, coreutils (timeout), wget%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- For automation (cron), avoid interactive flags: --pull, --update, --prune.%b\n' "$COLOR_CYAN" "$COLOR_RESET"
+
+    printf '\n%bExamples:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
+    printf '  %bMonitor specific containers with summary:%b\n' "$COLOR_YELLOW" "$COLOR_RESET"
+    printf '    ./container-monitor.sh --summary nginx myapp\n\n'
+    printf '  %bShow logs with filter patterns:%b\n' "$COLOR_YELLOW" "$COLOR_RESET"
+    printf '    ./container-monitor.sh --logs myapp error warn\n\n'
+    printf '  %bSkip update checks for local containers via config.yml:%b\n' "$COLOR_YELLOW" "$COLOR_RESET"
+    printf '    containers:\n      exclude:\n        updates:\n          - mylocalapp\n          - another-build\n'
 }
 print_header_box() {
     local box_width=55
