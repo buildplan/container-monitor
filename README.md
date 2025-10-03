@@ -191,7 +191,7 @@ The script offers several modes of operation via command-line flags.
   - **Run a standard check**: `./container-monitor.sh`
   - **Check specific containers**: `./container-monitor.sh portainer traefik`
   - **Exclude containers**: `./container-monitor.sh --exclude=watchtower,pihole`
-  - **Run in Summary-Only Mode**: `./container-monitor.sh summary`
+  - **Run in Summary-Only Mode**: `./container-monitor.sh --summary`
 
 #### Managing Updates
 
@@ -207,13 +207,13 @@ The script offers several modes of operation via command-line flags.
   - **System Cleanup**: Interactively run `docker system prune -a` to remove all unused Docker resources.
     `./container-monitor.sh --prune`
   - **View Logs**: View recent logs for a container, with optional keyword filtering.
-    `./container-monitor.sh logs portainer error critical`
+    `./container-monitor.sh --logs portainer error critical`
 
 -----
 
 ### Automation (Running as a Service)
 
-For automated execution, using `summary` and `--no-update` is recommended.
+For automated execution, using `--summary` and `--no-update` is recommended.
 
 #### Option A: systemd Timer Setup (Recommended)
 
@@ -226,7 +226,7 @@ Create `/etc/systemd/system/container-monitor.service` and `container-monitor.ti
 
     [Service]
     Type=oneshot
-    ExecStart=/path/to/your/container-monitor.sh --no-update summary
+    ExecStart=/path/to/your/container-monitor.sh --no-update --summary
     ```
   - **`container-monitor.timer`**:
     ```ini
@@ -248,7 +248,7 @@ Then enable the timer: `sudo systemctl enable --now container-monitor.timer`
 1.  Open your crontab: `crontab -e`
 2.  Add the following line to run the script every 6 hours:
     ```crontab
-    0 */6 * * * /path/to/your/container-monitor.sh --no-update summary >/dev/null 2>&1
+    0 */6 * * * /path/to/your/container-monitor.sh --no-update --summary >/dev/null 2>&1
     ```
 
 -----
