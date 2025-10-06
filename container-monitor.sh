@@ -714,41 +714,41 @@ run_with_retry() {
     return $exit_code
 }
 check_container_status() {
-    local container_name="$1"; local inspect_data="$2"; local cpu_for_status_msg="$3"; local mem_for_status_msg="$4"
-    local status health_status detailed_health
+    local container_name="$1"
+    local inspect_data="$2"
+    local cpu_for_status_msg="$3"
+    local mem_for_status_msg="$4"
+    local status health_status
     status=$(jq -r '.[0].State.Status' <<< "$inspect_data")
     health_status="not configured"
     if jq -e '.[0].State.Health != null and .[0].State.Health.Status != null' <<< "$inspect_data" >/dev/null 2>&1; then
         health_status=$(jq -r '.[0].State.Health.Status' <<< "$inspect_data")
     fi
     if [ "$status" != "running" ]; then
-        print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Not running (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_>
+        print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Not running (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_msg)" "DANGER"
         return 1
-    else
-        if [ "$health_status" = "healthy" ]; then
-            print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running and healthy (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem>
-            return 0
-        elif [ "$health_status" = "unhealthy" ]; then
-            print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running but UNHEALTHY (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $m>
-            local failing_streak
-            local last_output
-            local last_exit_code
-            failing_streak=$(jq -r '.[0].State.Health.FailingStreak // 0' <<< "$inspect_data")
-            last_exit_code=$(jq -r '.[0].State.Health.Log[-1].ExitCode // "unknown"' <<< "$inspect_data")
-            last_output=$(jq -r '.[0].State.Health.Log[-1].Output // "No output"' <<< "$inspect_data" | grep -v "^[[:space:]]*%" | grep -E "curl:|error|failed|re>
-            if [ -z "$last_output" ]; then
-                last_output=$(jq -r '.[0].State.Health.Log[-1].Output // "No output"' <<< "$inspect_data" | tail -n 1 | sed 's/^[[:space:]]*//')
-            fi
-            print_message "    ${COLOR_BLUE}Health Check Details:${COLOR_RESET} Failed $failing_streak consecutive time(s), Exit Code: $last_exit_code" "WARNING"
-            print_message "    ${COLOR_BLUE}Last Error:${COLOR_RESET} $last_output" "WARNING"
-            return 1
-        elif [ "$health_status" = "not configured" ]; then
-            print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_>
-            return 0
-        else
-            print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_>
-            return 1
+    fi
+    if [ "$health_status" = "healthy" ]; then
+        print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running and healthy (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_msg)" "GOOD"
+        return 0
+    elif [ "$health_status" = "unhealthy" ]; then
+        print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running but UNHEALTHY (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_msg)" "DANGER"
+        local failing_streak last_output last_exit_code
+        failing_streak=$(jq -r '.[0].State.Health.FailingStreak // 0' <<< "$inspect_data")
+        last_exit_code=$(jq -r '.[0].State.Health.Log[-1].ExitCode // "unknown"' <<< "$inspect_data")
+        last_output=$(jq -r '.[0].State.Health.Log[-1].Output // "No output"' <<< "$inspect_data" | grep -v "^[[:space:]]*%" | grep -Ei "curl:|error|failed|refused|timeout" | head -n 3 | sed 's/^[[:space:]]*//')
+        if [ -z "$last_output" ]; then
+            last_output=$(jq -r '.[0].State.Health.Log[-1].Output // "No output"' <<< "$inspect_data" | tail -n 1 | sed 's/^[[:space:]]*//')
         fi
+        print_message "    ${COLOR_BLUE}Health Check Details:${COLOR_RESET} Failed $failing_streak consecutive time(s), Exit Code: $last_exit_code" "WARNING"
+        print_message "    ${COLOR_BLUE}Last Error:${COLOR_RESET} $last_output" "WARNING"
+        return 1
+    elif [ "$health_status" = "not configured" ]; then
+        print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_msg)" "GOOD"
+        return 0
+    else
+        print_message "  ${COLOR_BLUE}Status:${COLOR_RESET} Running (Status: $status, Health: $health_status, CPU: $cpu_for_status_msg, Mem: $mem_for_status_msg)" "WARNING"
+        return 1
     fi
 }
 check_container_restarts() {
