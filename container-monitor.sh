@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.71 ---
+# --- v0.72 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,8 +53,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.71"
-VERSION_DATE="2025-10-02"
+VERSION="v0.72"
+VERSION_DATE="2025-10-06"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -781,16 +781,21 @@ check_disk_space() {
         return 0
     fi
     for ((i=0; i<num_mounts; i++)); do
-        local mp_destination
+        local mp_destination mp_type mp_source
         mp_destination=$(jq -r ".[0].Mounts[$i].Destination // empty" <<< "$inspect_data" 2>/dev/null)
+        mp_type=$(jq -r ".[0].Mounts[$i].Type // empty" <<< "$inspect_data" 2>/dev/null)
+        mp_source=$(jq -r ".[0].Mounts[$i].Source // empty" <<< "$inspect_data" 2>/dev/null)
         if [ -z "$mp_destination" ]; then continue; fi
         if [[ "$mp_destination" == *".sock" || "$mp_destination" == "/proc"* || "$mp_destination" == "/sys"* || "$mp_destination" == "/dev"* || "$mp_destination" == "/host/"* ]]; then
             continue
         fi
         local disk_usage_output
-        disk_usage_output=$(timeout 5 docker exec "$container_name" df -P "$mp_destination" 2>/dev/null)
-        if [ $? -ne 0 ]; then
-            continue
+        if ! disk_usage_output=$(timeout 5 docker exec "$container_name" df -P "$mp_destination" 2>/dev/null); then
+            if [[ "$mp_type" == "bind" ]] && [ -n "$mp_source" ] && [ -d "$mp_source" ]; then
+                disk_usage_output=$(df -P "$mp_source" 2>/dev/null) || continue
+            else
+                continue
+            fi
         fi
         local disk_usage
         disk_usage=$(echo "$disk_usage_output" | awk 'NR==2 {val=$(NF-1); sub(/%$/,"",val); print val}')
@@ -802,23 +807,59 @@ check_disk_space() {
 }
 check_network() {
     local container_name="$1"; local issues_found=0
-    local network_stats; network_stats=$(timeout 5 docker exec "$container_name" cat /proc/net/dev 2>/dev/null)
-    if [ -z "$network_stats" ]; then print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} Could not get network stats for '$container_name'." "WARNING"; return 1; fi
-    local network_issue_reported_for_container=false
-    while IFS= read -r line; do
-        if [[ "$line" == *:* ]]; then
-            local interface data_part errors packets
-            interface=$(echo "$line" | awk -F ':' '{print $1}' | sed 's/^[ \t]*//;s/[ \t]*$//')
-            data_part=$(echo "$line" | cut -d':' -f2-)
-            read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
-            if ! [[ "$_r_errs" =~ ^[0-9]+$ && "$_t_drop" =~ ^[0-9]+$ ]]; then continue; fi
-            errors=$((_r_errs + _t_drop))
-            if [ "$errors" -gt "$NETWORK_ERROR_THRESHOLD" ]; then
-                print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} Interface '$interface' has $errors errors/drops in '$container_name'." "WARNING"; issues_found=1; network_issue_reported_for_container=true
+    local network_stats
+    network_stats=$(timeout 5 docker exec "$container_name" cat /proc/net/dev 2>/dev/null)
+    if [ -n "$network_stats" ]; then
+        local network_issue_reported_for_container=false
+        while IFS= read -r line; do
+            if [[ "$line" == *:* ]]; then
+                local interface data_part errors
+                interface=$(echo "$line" | awk -F ':' '{print $1}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+                data_part=$(echo "$line" | cut -d':' -f2-)
+                read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
+                if ! [[ "$_r_errs" =~ ^[0-9]+$ && "$_t_drop" =~ ^[0-9]+$ ]]; then continue; fi
+                errors=$((_r_errs + _t_drop))
+                if [ "$errors" -gt "$NETWORK_ERROR_THRESHOLD" ]; then
+                    print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} Interface '$interface' has $errors errors/drops in '$container_name'." "WARNING"
+                    issues_found=1
+                fi
             fi
+        done <<< "$(tail -n +3 <<< "$network_stats")"
+        if [ $issues_found -eq 0 ]; then
+            print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} No significant network issues detected for '$container_name'." "INFO"
         fi
-    done <<< "$(tail -n +3 <<< "$network_stats")"
-    if [ $issues_found -eq 0 ]; then print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} No significant network issues detected for '$container_name'." "INFO"; fi
+    else
+        local container_pid
+        container_pid=$(docker inspect -f '{{.State.Pid}}' "$container_name" 2>/dev/null)
+        if [ -n "$container_pid" ] && [ "$container_pid" -gt 0 ]; then
+            network_stats=$(timeout 5 cat "/proc/$container_pid/net/dev" 2>/dev/null)
+            if [ -n "$network_stats" ]; then
+                while IFS= read -r line; do
+                    if [[ "$line" == *:* ]]; then
+                        local interface data_part errors
+                        interface=$(echo "$line" | awk -F ':' '{print $1}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+                        data_part=$(echo "$line" | cut -d':' -f2-)
+                        read -r _r_bytes _r_packets _r_errs _r_drop _ _ _ _ _t_bytes _t_packets _t_errs _t_drop <<< "$data_part"
+                        if ! [[ "$_r_errs" =~ ^[0-9]+$ && "$_t_drop" =~ ^[0-9]+$ ]]; then continue; fi
+                        errors=$((_r_errs + _t_drop))
+                        if [ "$errors" -gt "$NETWORK_ERROR_THRESHOLD" ]; then
+                            print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} Interface '$interface' has $errors errors/drops in '$container_name' (via host namespace)." "WARNING"
+                            issues_found=1
+                        fi
+                    fi
+                done <<< "$(tail -n +3 <<< "$network_stats")"
+                if [ $issues_found -eq 0 ]; then
+                    print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} No significant network issues detected for '$container_name' (via host namespace)." "INFO"
+                fi
+            else
+                print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} Could not access network stats for '$container_name' (minimal container, host access failed)." "WARNING"
+                issues_found=1
+            fi
+        else
+            print_message "  ${COLOR_BLUE}Network:${COLOR_RESET} Could not get PID for '$container_name'." "WARNING"
+            issues_found=1
+        fi
+    fi
     return $issues_found
 }
 get_update_strategy() {
