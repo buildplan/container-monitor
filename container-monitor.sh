@@ -1356,12 +1356,14 @@ run_interactive_update_mode() {
             fi
         done
     echo
-    local prune_choice
-    read -rp "${COLOR_YELLOW}Update process finished. Would you like to clean up the system now? (y/n): ${COLOR_RESET}" prune_choice
-    if [[ "$prune_choice" =~ ^[yY]$ ]]; then
-        print_message "Waiting 5 seconds for Docker daemon to settle before pruning..." "INFO"
-        sleep 5
-        run_prune
+    if [[ "${RECREATE_MODE}" == "true" ]]; then
+        local prunechoice
+        read -rp "${COLOR_YELLOW}Update process finished. Would you like to clean up the system now? (y/n) ${COLOR_RESET}" prunechoice
+        if [[ "${prune_choice}" =~ ^[yY]$ ]]; then
+            print_message "Waiting 5 seconds for Docker daemon to settle before pruning..." "INFO"
+            sleep 5
+            run_prune
+        fi
     fi
     print_message "Interactive update process finished." "INFO"
 }
