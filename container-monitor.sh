@@ -1414,12 +1414,17 @@ print_summary() {
                         issue_prefix="📜" ;;
                     Update*)
                         issue_prefix="🔄"
-                        local main_msg; main_msg=$(echo "$issue_detail" | awk -F', Notes: ' '{print $1}')
-                        local notes_url; notes_url=$(echo "$issue_detail" | awk -F', Notes: ' '{print $2}')
-                        print_message "  - ${issue_prefix} ${main_msg}" "WARNING"
-                        if [[ -n "$notes_url" && "$notes_url" != "$main_msg" ]]; then
-                            print_message "    - Notes: ${notes_url}" "WARNING"
+                        local main_msg notes_url
+                        if [[ "$issue_detail" == *", Notes: "* ]]; then
+                            main_msg="${issue_detail%%, Notes: *}"
+                            notes_url="${issue_detail#*, Notes: }"
+                        else
+                            main_msg="$issue_detail"
+                            notes_url=""
                         fi
+                        print_message "  - ${issue_prefix} ${main_msg}" "WARNING"
+                        if [[ -n "$notes_url" ]]; then
+                            print_message "    - Notes: ${notes_url}" "WARNING"; fi
                         needs_default_print=false ;;
                     Resources*)
                         issue_prefix="📈" ;;
