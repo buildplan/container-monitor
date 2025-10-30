@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.73 ---
+# --- v0.74 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,8 +53,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.73"
-VERSION_DATE="2025-10-21"
+VERSION="v0.74"
+VERSION_DATE="2025-10-30"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1368,45 +1368,61 @@ run_interactive_update_mode() {
     print_message "Interactive update process finished." "INFO"
 }
 print_summary() {
-    local container_name_summary issues issue_emoji
+    local total_containers_checked="$1"
+    local container_name_summary issues
     local host_disk_summary_output host_memory_summary_output
+    local -A seen_containers
+    local unique_containers=()
+    for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+        if ! [[ -v seen_containers[$container] ]]; then
+            unique_containers+=("$container")
+            seen_containers["$container"]=1
+        fi
+    done
+    local issue_container_count=${#unique_containers[@]}
+    local healthy_container_count=$((total_containers_checked - issue_container_count))
     PRINT_MESSAGE_FORCE_STDOUT=true
     print_message "-------------------------- Host System Stats ---------------------------" "SUMMARY"
     host_disk_summary_output=$(check_host_disk_usage)
     host_memory_summary_output=$(check_host_memory_usage)
     print_message "$host_disk_summary_output" "SUMMARY"
     print_message "$host_memory_summary_output" "SUMMARY"
-    if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+    print_message "------------------- Container Health Overview --------------------" "SUMMARY"
+    if [ "$total_containers_checked" -gt 0 ]; then
+        local health_message="  Checked $total_containers_checked containers: ${COLOR_GREEN}${healthy_container_count} healthy ✅${COLOR_RESET}"
+        if [ "$issue_container_count" -gt 0 ]; then
+             health_message+=", ${COLOR_YELLOW}${issue_container_count} with issues ⚠️${COLOR_RESET}"
+        fi
+        print_message "$health_message" "SUMMARY"
+    fi
+    if [ ${#unique_containers[@]} -gt 0 ]; then
         print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
         print_message "The following containers have warnings or errors:" "SUMMARY"
-        local -A seen_containers
-        local unique_containers=()
-        for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-		    if ! [[ -v seen_containers[$container] ]]; then
-                unique_containers+=("$container")
-                seen_containers["$container"]=1
-            fi
-        done
         for container_name_summary in "${unique_containers[@]}"; do
             local issues="${CONTAINER_ISSUES_MAP["$container_name_summary"]:-Unknown Issue}"
-            local emoji_string=""
-            if [[ "$issues" == *"Status"* ]]; then emoji_string+="🛑"; fi
-            if [[ "$issues" == *"Restarts"* ]]; then emoji_string+="🔥"; fi
-            if [[ "$issues" == *"Logs"* ]]; then emoji_string+="📜"; fi
-            if [[ "$issues" == *"Update"* ]]; then emoji_string+="🔄"; fi
-            if [[ "$issues" == *"Resources"* ]]; then emoji_string+="📈"; fi
-            if [[ "$issues" == *"Disk"* ]]; then emoji_string+="💾"; fi
-            if [[ "$issues" == *"Network"* ]]; then emoji_string+="📶"; fi
-            if [ -z "$emoji_string" ]; then emoji_string="❌"; fi
-            print_message "- ${container_name_summary} ${emoji_string}" "WARNING"
+            print_message "- ${container_name_summary} ⚠️" "WARNING"
             IFS='|' read -r -a issue_array <<< "$issues"
             for issue_detail in "${issue_array[@]}"; do
-                print_message "  - ${issue_detail}" "WARNING"
+                local issue_prefix="❌"
+                case "$issue_detail" in
+                    Status*)    issue_prefix="🛑" ;;
+                    Restarts*)  issue_prefix="🔥" ;;
+                    Logs*)      issue_prefix="📜" ;;
+                    Update*)    issue_prefix="🔄" ;;
+                    Resources*) issue_prefix="📈" ;;
+                    Disk*)      issue_prefix="💾" ;;
+                    Network*)   issue_prefix="📶" ;;
+                esac
+                print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
             done
         done
     else
         print_message "------------------- Summary of Container Issues Found --------------------" "SUMMARY"
-        print_message "No issues found in monitored containers. All container checks passed. ✅" "GOOD"
+        if [ "$total_containers_checked" -gt 0 ]; then
+            print_message "All $total_containers_checked monitored containers are healthy. No issues found. ✅" "GOOD"
+        else
+            print_message "No containers were monitored. No issues to report." "GOOD"
+        fi
     fi
     print_message "------------------------------------------------------------------------" "SUMMARY"
     PRINT_MESSAGE_FORCE_STDOUT=false
@@ -1732,7 +1748,7 @@ perform_monitoring() {
                 CONTAINER_ISSUES_MAP["$container_name"]="$issues"
             fi
         done
-        print_summary
+        print_summary "${#CONTAINERS_TO_CHECK[@]}"
         if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
             local notify_issues=false
@@ -1753,8 +1769,8 @@ perform_monitoring() {
 
                 if [ ${#filtered_issues_array[@]} -gt 0 ]; then
                     local filtered_issues_str
-                    filtered_issues_str=$(IFS=, ; echo "${filtered_issues_array[*]}")
-                    summary_message+="\n[$container]\n- $filtered_issues_str\n"
+                    filtered_issues_str=$(printf '\n- %s' "${filtered_issues_array[@]}")
+                    summary_message+="\n[$container]${filtered_issues_str}\n"
                 fi
             done
             if [ "$notify_issues" = true ]; then
@@ -1821,7 +1837,7 @@ perform_monitoring() {
             print_message "Summary generation completed." "SUMMARY"
         elif [ ${#CONTAINERS_TO_CHECK[@]} -eq 0 ]; then
             print_message "No containers specified or found running to monitor." "INFO"
-            print_summary
+            print_summary "${#CONTAINERS_TO_CHECK[@]}"
         else
             print_message "${COLOR_GREEN}Docker monitoring script completed successfully.${COLOR_RESET}" "INFO"
         fi
