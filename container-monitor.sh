@@ -1405,15 +1405,43 @@ print_summary() {
             for issue_detail in "${issue_array[@]}"; do
                 local issue_prefix="❌"
                 case "$issue_detail" in
-                    Status*)    issue_prefix="🛑" ;;
-                    Restarts*)  issue_prefix="🔥" ;;
-                    Logs*)      issue_prefix="📜" ;;
-                    Update*)    issue_prefix="🔄" ;;
-                    Resources*) issue_prefix="📈" ;;
-                    Disk*)      issue_prefix="💾" ;;
-                    Network*)   issue_prefix="📶" ;;
+                    Status*)
+                        issue_prefix="🛑"
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
+                    Restarts*)
+                        issue_prefix="🔥"
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
+                    Logs*)
+                        issue_prefix="📜"
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
+                    Update*)
+                        issue_prefix="🔄"
+                        local main_msg; main_msg=$(echo "$issue_detail" | awk -F', Notes: ' '{print $1}')
+                        local notes_url; notes_url=$(echo "$issue_detail" | awk -F', Notes: ' '{print $2}')
+                        print_message "  - ${issue_prefix} ${main_msg}" "WARNING"
+                        if [[ -n "$notes_url" && "$notes_url" != "$main_msg" ]]; then
+                            print_message "    - Notes: ${notes_url}" "WARNING"
+                        fi
+                        ;;
+                    Resources*)
+                        issue_prefix="📈"
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
+                    Disk*)
+                        issue_prefix="💾"
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
+                    Network*)
+                        issue_prefix="📶"
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
+                    *) # Default for unknown
+                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                        ;;
                 esac
-                print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
             done
         done
     else
