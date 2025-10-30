@@ -1391,7 +1391,7 @@ print_summary() {
     if [ "$total_containers_checked" -gt 0 ]; then
         local health_message="  Checked $total_containers_checked containers: ${COLOR_GREEN}${healthy_container_count} healthy ✅${COLOR_RESET}"
         if [ "$issue_container_count" -gt 0 ]; then
-             health_message+=", ${COLOR_YELLOW}${issue_container_count} with issues ⚠️${COLOR_RESET}"
+            health_message+=", ${COLOR_YELLOW}${issue_container_count} with issues ⚠️${COLOR_RESET}"
         fi
         print_message "$health_message" "SUMMARY"
     fi
@@ -1404,19 +1404,14 @@ print_summary() {
             IFS='|' read -r -a issue_array <<< "$issues"
             for issue_detail in "${issue_array[@]}"; do
                 local issue_prefix="❌"
+                local needs_default_print=true
                 case "$issue_detail" in
                     Status*)
-                        issue_prefix="🛑"
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
+                        issue_prefix="🛑" ;;
                     Restarts*)
-                        issue_prefix="🔥"
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
+                        issue_prefix="🔥" ;;
                     Logs*)
-                        issue_prefix="📜"
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
+                        issue_prefix="📜" ;;
                     Update*)
                         issue_prefix="🔄"
                         local main_msg; main_msg=$(echo "$issue_detail" | awk -F', Notes: ' '{print $1}')
@@ -1425,23 +1420,18 @@ print_summary() {
                         if [[ -n "$notes_url" && "$notes_url" != "$main_msg" ]]; then
                             print_message "    - Notes: ${notes_url}" "WARNING"
                         fi
-                        ;;
+                        needs_default_print=false ;;
                     Resources*)
-                        issue_prefix="📈"
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
+                        issue_prefix="📈" ;;
                     Disk*)
-                        issue_prefix="💾"
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
+                        issue_prefix="💾" ;;
                     Network*)
-                        issue_prefix="📶"
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
-                    *) # Default for unknown
-                        print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
-                        ;;
+                        issue_prefix="📶" ;;
+                    *) ;;
                 esac
+                if [ "$needs_default_print" = true ]; then
+                    print_message "  - ${issue_prefix} ${issue_detail}" "WARNING"
+                fi
             done
         done
     else
