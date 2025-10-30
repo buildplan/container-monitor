@@ -1750,7 +1750,7 @@ perform_monitoring() {
             exec 3> progress_pipe
         fi
         export CURRENT_STATE_JSON_STRING="$current_state_json"
-        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir' && echo >&3"
+        printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir'; echo >&3"
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             exec 3>&-
             wait "$progress_pid"
