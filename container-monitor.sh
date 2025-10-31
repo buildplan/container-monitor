@@ -1689,8 +1689,8 @@ perform_monitoring() {
 
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
+        trap 'rm -rf "$results_dir"' EXIT INT TERM
         local progress_pipe="${results_dir}/progress_pipe"
-        trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
         if [ -f "$LOCK_FILE" ]; then
             local locked_pid; locked_pid=$(cat "$LOCK_FILE")
             if ! ps -p "$locked_pid" > /dev/null; then
@@ -1707,6 +1707,7 @@ perform_monitoring() {
             fi
             sleep 1
         done
+        trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
@@ -1802,19 +1803,6 @@ perform_monitoring() {
                 fi
             fi
         fi
-        local lock_acquired=false
-        for ((i=0; i<LOCK_TIMEOUT_SECONDS*10; i++)); do
-            if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
-                lock_acquired=true
-                break
-            fi
-            sleep 0.1
-        done
-        if [ "$lock_acquired" = false ]; then
-            print_message "Could not acquire lock for state update after $LOCK_TIMEOUT_SECONDS seconds." "DANGER"
-            rm -rf "$results_dir"
-            return 1
-        fi
         local new_state_json; new_state_json=$(cat "$STATE_FILE")
         new_state_json=$(jq '.restarts = (.restarts // {}) | .logs = (.logs // {}) | .updates = (.updates // {})' <<< "$new_state_json")
         for restart_file in "$results_dir"/*.restarts; do
@@ -1848,6 +1836,9 @@ perform_monitoring() {
             .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
         ' <<< "$new_state_json")
         echo "$new_state_json" > "$STATE_FILE"
+        rm -f "$LOCK_FILE"
+        rm -rf "$results_dir"
+        trap - EXIT INT TERM
     else
         PRINT_MESSAGE_FORCE_STDOUT=true
         if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
