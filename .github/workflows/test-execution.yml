@@ -15,11 +15,7 @@ jobs:
     name: Test and Run Script
     runs-on: ubuntu-latest
     
-    # This block starts a Docker daemon service for the job to use
-    services:
-      docker:
-        image: docker:dind
-        options: --privileged --name=docker
+    # NO "services:" BLOCK NEEDED
     
     steps:
       - name: Checkout repository
@@ -39,36 +35,27 @@ jobs:
         run: chmod +x container-monitor.sh
 
       - name: Run Functional Tests
-        # Set DOCKER_HOST to tell the script how to find the service daemon
-        env:
-          DOCKER_HOST: "tcp://docker:2375"
         run: |
           echo "Spinning up test container..."
-          # Start a simple, long-running container for the script to find
+          # This will now use the runner's main Docker daemon
           docker run -d --name=test-monitor-alpine alpine:latest sleep 3600
           echo "Test container 'test-monitor-alpine' is running:"
           docker ps
           
           echo "--- Test 1: --help ---"
-          # Simple check to ensure the script runs and prints help
           ./container-monitor.sh --help
 
           echo "--- Test 2: --check-setup ---"
-          # This is a critical test of the script's own environment checks
           ./container-monitor.sh --check-setup
           
           echo "--- Test 3: --summary (with a running container) ---"
-          # This now provides a real test of the monitoring logic
           ./container-monitor.sh --summary
           
           echo "--- Test 4: Specific container run ---"
-          # This tests the logic for monitoring a named container
           ./container-monitor.sh test-monitor-alpine
 
           echo "--- Test 5: --logs (against test container) ---"
-          # This tests the --logs command. It will be empty, which is a successful run.
           ./container-monitor.sh --logs test-monitor-alpine
 
           echo "--- Test 6: --exclude (against test container) ---"
-          # This tests the exclude logic
           ./container-monitor.sh --summary --exclude=test-monitor-alpine
