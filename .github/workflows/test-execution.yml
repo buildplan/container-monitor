@@ -1,50 +1,74 @@
 name: Test Script Execution
 
-# This workflow runs only on pushes to the 'dev' branch
 on:
   push:
     branches:
-      - dev
-      - test
+      - dev*
+      - test*
+      - improve*
 
 permissions:
   contents: read
 
 jobs:
-  dry-run:
-    name: Dry Run Tests
+  test-script:
+    name: Test and Run Script
     runs-on: ubuntu-latest
-
+    
+    # This block starts a Docker daemon service for the job to use
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged --name=docker
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Dependencies
+      - name: Setup All Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq skopeo gawk
+          sudo apt-get install -y jq skopeo gawk wget
+          
+          # Manually install yq, as the script's installer is interactive
+          sudo wget -q "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" -O /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
 
       - name: Make script executable
         run: chmod +x container-monitor.sh
 
-      - name: Run test commands
+      - name: Run Functional Tests
+        # Set DOCKER_HOST to tell the script how to find the service daemon
+        env:
+          DOCKER_HOST: "tcp://docker:2375"
         run: |
-          echo "Running script execution tests..."
+          echo "Spinning up test container..."
+          # Start a simple, long-running container for the script to find
+          docker run -d --name=test-monitor-alpine alpine:latest sleep 3600
+          echo "Test container 'test-monitor-alpine' is running:"
+          docker ps
+          
+          echo "--- Test 1: --help ---"
+          # Simple check to ensure the script runs and prints help
+          ./container-monitor.sh --help
 
-          # Test 1: Run in summary mode. Should execute without errors.
-          echo "Testing: ./container-monitor.sh summary"
-          ./container-monitor.sh summary
+          echo "--- Test 2: --check-setup ---"
+          # This is a critical test of the script's own environment checks
+          ./container-monitor.sh --check-setup
+          
+          echo "--- Test 3: --summary (with a running container) ---"
+          # This now provides a real test of the monitoring logic
+          ./container-monitor.sh --summary
+          
+          echo "--- Test 4: Specific container run ---"
+          # This tests the logic for monitoring a named container
+          ./container-monitor.sh test-monitor-alpine
 
-          # Test 2: Test the --exclude flag.
-          echo "Testing: ./container-monitor.sh --exclude=foo,bar summary"
-          ./container-monitor.sh --exclude=foo,bar summary
+          echo "--- Test 5: --logs (against test container) ---"
+          # This tests the --logs command. It will be empty, which is a successful run.
+          ./container-monitor.sh --logs test-monitor-alpine
 
-          # Test 3: Test the logs command.
-          echo "Testing: ./container-monitor.sh logs fake-container"
-          ./container-monitor.sh logs fake-container
-
-          # Test 4: Test providing a specific container name.
-          echo "Testing: ./container-monitor.sh some-container-name"
-          ./container-monitor.sh some-container-name
-
-          echo "All test commands executed successfully."
+          echo "--- Test 6: --exclude (against test container) ---"
+          # This tests the exclude logic
+          ./container-monitor.sh --summary --exclude=test-monitor-alpine
