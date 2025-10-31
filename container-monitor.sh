@@ -1827,7 +1827,7 @@ perform_monitoring() {
                             *) ;;
                         esac
                         formatted_issues_str+="\n- ${issue_prefix} ${issue_detail}"
-                    done                    
+                    done
                     summary_message+="\n[${container}]${formatted_issues_str}\n"
                 fi
             done
