@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo apt-get update
           # Install all dependencies the script checks for
-          sudo apt-get install -y jq skopeo gawk coreutils wget docker.io
+          sudo apt-get install -y jq skopeo gawk coreutils wget
           # Install yq (required by the script's dep check)
           sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
           sudo chmod +x /usr/local/bin/yq
