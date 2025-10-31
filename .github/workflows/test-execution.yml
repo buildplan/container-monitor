@@ -1,50 +1,101 @@
-name: Test Script Execution
+name: Script CI Tests
 
-# This workflow runs only on pushes to the 'dev' branch
 on:
   push:
     branches:
-      - dev
-      - test
+      - main
+      - dev* # Catches dev, develop, etc.
+      - test*
+  pull_request:
+    branches:
+      - main
+      - dev*
+      - test*
 
 permissions:
   contents: read
 
 jobs:
+  # Job 1: Fast check for dependencies and script syntax
   dry-run:
-    name: Dry Run Tests
+    name: Dry Run & Dependency Check
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Dependencies
+      - name: Install All Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq skopeo gawk
+          # Install all dependencies the script checks for
+          sudo apt-get install -y jq skopeo gawk coreutils wget docker.io
+          # Install yq (required by the script's dep check)
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
 
       - name: Make script executable
-        run: chmod +x container-monitor.sh
+        run: chmod +x container-monitor*.sh # Use glob to catch versioned name or final name
 
-      - name: Run test commands
+      - name: Run Built-in Setup Check
+        # This uses your script's own --check-setup, for dry-run.
+        # Use sudo so the script can find the 'docker' command.
         run: |
-          echo "Running script execution tests..."
+          sudo ./container-monitor*.sh --check-setup
 
-          # Test 1: Run in summary mode. Should execute without errors.
-          echo "Testing: ./container-monitor.sh summary"
-          ./container-monitor.sh summary
+  # Job 2: Full integration test with live containers
+  integration-test:
+    name: Integration Test Suite
+    runs-on: ubuntu-latest
+    needs: dry-run # Only run this if the dry-run job passes
 
-          # Test 2: Test the --exclude flag.
-          echo "Testing: ./container-monitor.sh --exclude=foo,bar summary"
-          ./container-monitor.sh --exclude=foo,bar summary
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          # Test 3: Test the logs command.
-          echo "Testing: ./container-monitor.sh logs fake-container"
-          ./container-monitor.sh logs fake-container
+      - name: Make scripts executable
+        run: |
+          chmod +x container-monitor*.sh
+          chmod +x test-container-monitor.sh
 
-          # Test 4: Test providing a specific container name.
-          echo "Testing: ./container-monitor.sh some-container-name"
-          ./container-monitor.sh some-container-name
+      - name: Install All Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker.io jq skopeo gawk coreutils wget
+          # Install yq
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
 
-          echo "All test commands executed successfully."
+      - name: Create test environment
+        # Run all docker commands with sudo
+        run: |
+          sudo docker run -d --name test-app-1 nginx:latest
+          sudo docker run -d --name test-app-2 nginx:alpine
+          echo "Waiting for containers to start..."
+          sleep 3
+          sudo docker ps
+
+      - name: Run test suite
+        # Run the test script with sudo so it can run docker commands
+        run: |
+          sudo bash test-container-monitor.sh
+        env:
+          # Pass the container names to the script
+          CONTAINER_NAMES: "test-app-1,test-app-2"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            *.log
+            .monitor-state.json
+          retention-days: 7
+
+      - name: Cleanup containers
+        if: always()
+        run: |
+          echo "Cleaning up test containers..."
+          sudo docker stop test-app-1 test-app-2 || true
+          sudo docker rm test-app-1 test-app-2 || true
+          sudo docker ps -a
