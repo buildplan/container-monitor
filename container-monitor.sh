@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.74 ---
+# --- v0.75 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,8 +53,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.74"
-VERSION_DATE="2025-10-30"
+VERSION="v0.75"
+VERSION_DATE="2025-10-31"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1689,6 +1689,8 @@ perform_monitoring() {
 
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
+        trap 'rm -rf "$results_dir"' EXIT INT TERM
+        local progress_pipe="${results_dir}/progress_pipe"
         if [ -f "$LOCK_FILE" ]; then
             local locked_pid; locked_pid=$(cat "$LOCK_FILE")
             if ! ps -p "$locked_pid" > /dev/null; then
@@ -1705,23 +1707,21 @@ perform_monitoring() {
             fi
             sleep 1
         done
-        trap 'rm -f "$LOCK_FILE"' EXIT
+        trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
         fi
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
-        rm -f "$LOCK_FILE"
-        trap - EXIT
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
-               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR SUMMARY_ONLY_MODE
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
-            mkfifo progress_pipe
+            mkfifo "$progress_pipe"
             (
 			    local spinner_chars=("|" "/" "-" "\\")
                 local spinner_idx=0
@@ -1743,18 +1743,19 @@ perform_monitoring() {
                     for ((j=0; j< (bar_len - bar_filled_len) ; j++)); do bar_empty+="░"; done
                     printf "\r${COLOR_GREEN}Progress: [%s%s] %3d%% (%d/%d) | Elapsed: %s [${spinner_char}]${COLOR_RESET}" \
                             "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
-                done < progress_pipe
+                done < "$progress_pipe"
                     echo
             ) &
             local progress_pid=$!
-            exec 3> progress_pipe
+            exec 3> "$progress_pipe"
+        else
+            exec 3> /dev/null
         fi
         export CURRENT_STATE_JSON_STRING="$current_state_json"
         printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir'; echo >&3"
+        exec 3>&-
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
-            exec 3>&-
-            wait "$progress_pid"
-            rm progress_pipe
+            wait "$progress_pid" 2>/dev/null || true
             echo
             print_message "${COLOR_BLUE}---------------------- Docker Container Monitoring Results ----------------------${COLOR_RESET}" "INFO"
             for container in "${CONTAINERS_TO_CHECK[@]}"; do
@@ -1776,7 +1777,15 @@ perform_monitoring() {
             local summary_message=""
             local notify_issues=false
             IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
+            local -A seen_containers_notif
+            local unique_containers_notif=()
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+                if ! [[ -v seen_containers_notif[$container] ]]; then
+                    unique_containers_notif+=("$container")
+                    seen_containers_notif["$container"]=1
+                fi
+            done
+            for container in "${unique_containers_notif[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
                 local filtered_issues_array=()
                 IFS='|' read -r -a issue_array <<< "$issues"
@@ -1791,9 +1800,35 @@ perform_monitoring() {
                 done
 
                 if [ ${#filtered_issues_array[@]} -gt 0 ]; then
-                    local filtered_issues_str
-                    filtered_issues_str=$(printf '\n- %s' "${filtered_issues_array[@]}")
-                    summary_message+="\n[$container]${filtered_issues_str}\n"
+                    local formatted_issues_str=""
+                    for issue_detail in "${filtered_issues_array[@]}"; do
+                        local issue_prefix="❌"
+                        case "$issue_detail" in
+                            Status*) issue_prefix="🛑" ;;
+                            Restarts*) issue_prefix="🔥" ;;
+                            Logs*) issue_prefix="📜" ;;
+                            Update*) issue_prefix="🔄"
+                                local main_msg notes_url
+                                if [[ "$issue_detail" == *", Notes: "* ]]; then
+                                    main_msg="${issue_detail%%, Notes: *}"
+                                    notes_url="${issue_detail#*, Notes: }"
+                                else
+                                    main_msg="$issue_detail"
+                                    notes_url=""
+                                fi
+                                formatted_issues_str+="\n- ${issue_prefix} ${main_msg}"
+                                if [[ -n "$notes_url" ]]; then
+                                    formatted_issues_str+="\n  - Notes: ${notes_url}"
+                                fi
+                                continue ;;
+                            Resources*) issue_prefix="📈" ;;
+                            Disk*) issue_prefix="💾" ;;
+                            Network*) issue_prefix="📶" ;;
+                            *) ;;
+                        esac
+                        formatted_issues_str+="\n- ${issue_prefix} ${issue_detail}"
+                    done
+                    summary_message+="\n[${container}]${formatted_issues_str}\n"
                 fi
             done
             if [ "$notify_issues" = true ]; then
@@ -1803,20 +1838,6 @@ perform_monitoring() {
                     send_notification "$summary_message" "$notification_title"
                 fi
             fi
-        fi
-        local lock_acquired=false
-        for ((i=0; i<LOCK_TIMEOUT_SECONDS*10; i++)); do
-            if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
-                trap 'rm -f "$LOCK_FILE"' EXIT
-                lock_acquired=true
-                break
-            fi
-            sleep 0.1
-        done
-        if [ "$lock_acquired" = false ]; then
-            print_message "Could not acquire lock for state update after $LOCK_TIMEOUT_SECONDS seconds." "DANGER"
-            rm -rf "$results_dir"
-            return 1
         fi
         local new_state_json; new_state_json=$(cat "$STATE_FILE")
         new_state_json=$(jq '.restarts = (.restarts // {}) | .logs = (.logs // {}) | .updates = (.updates // {})' <<< "$new_state_json")
@@ -1852,8 +1873,8 @@ perform_monitoring() {
         ' <<< "$new_state_json")
         echo "$new_state_json" > "$STATE_FILE"
         rm -f "$LOCK_FILE"
-        trap - EXIT
         rm -rf "$results_dir"
+        trap - EXIT INT TERM
     else
         PRINT_MESSAGE_FORCE_STDOUT=true
         if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
