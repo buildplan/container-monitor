@@ -1777,7 +1777,15 @@ perform_monitoring() {
             local summary_message=""
             local notify_issues=false
             IFS=',' read -r -a notify_on_array <<< "$NOTIFY_ON"
+            local -A seen_containers_notif
+            local unique_containers_notif=()
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+                if ! [[ -v seen_containers_notif[$container] ]]; then
+                    unique_containers_notif+=("$container")
+                    seen_containers_notif["$container"]=1
+                fi
+            done
+            for container in "${unique_containers_notif[@]}"; do
                 local issues=${CONTAINER_ISSUES_MAP["$container"]}
                 local filtered_issues_array=()
                 IFS='|' read -r -a issue_array <<< "$issues"
@@ -1792,9 +1800,35 @@ perform_monitoring() {
                 done
 
                 if [ ${#filtered_issues_array[@]} -gt 0 ]; then
-                    local filtered_issues_str
-                    filtered_issues_str=$(printf '\n- %s' "${filtered_issues_array[@]}")
-                    summary_message+="\n[$container]${filtered_issues_str}\n"
+                    local formatted_issues_str=""
+                    for issue_detail in "${filtered_issues_array[@]}"; do
+                        local issue_prefix="❌"
+                        case "$issue_detail" in
+                            Status*) issue_prefix="🛑" ;;
+                            Restarts*) issue_prefix="🔥" ;;
+                            Logs*) issue_prefix="📜" ;;
+                            Update*) issue_prefix="🔄"
+                                local main_msg notes_url
+                                if [[ "$issue_detail" == *", Notes: "* ]]; then
+                                    main_msg="${issue_detail%%, Notes: *}"
+                                    notes_url="${issue_detail#*, Notes: }"
+                                else
+                                    main_msg="$issue_detail"
+                                    notes_url=""
+                                fi
+                                formatted_issues_str+="\n- ${issue_prefix} ${main_msg}"
+                                if [[ -n "$notes_url" ]]; then
+                                    formatted_issues_str+="\n  - Notes: ${notes_url}"
+                                fi
+                                continue ;;
+                            Resources*) issue_prefix="📈" ;;
+                            Disk*) issue_prefix="💾" ;;
+                            Network*) issue_prefix="📶" ;;
+                            *) ;;
+                        esac
+                        formatted_issues_str+="\n- ${issue_prefix} ${issue_detail}"
+                    done                    
+                    summary_message+="\n[${container}]${formatted_issues_str}\n"
                 fi
             done
             if [ "$notify_issues" = true ]; then
