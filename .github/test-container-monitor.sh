@@ -128,7 +128,9 @@ if echo "$HELP" | grep -q -- "--save-logs"; then
         RELATIVE_LOG_PATH="$(grep -oE "saved to '[^']+\.log'" "$OUT_STD" | sed -E "s/saved to '([^']+)'.*/\1/" | head -n1 || true)"
         if [[ -n "$RELATIVE_LOG_PATH" && -f "$RELATIVE_LOG_PATH" ]]; then
           mv "$RELATIVE_LOG_PATH" "$TEST_TMP/" || true
-          [[ -f "${RELATIVE_LOG_PATH}.err" ]] && mv "${RELATIVE_LOG_PATH}.err" "$TEST_TMP/" || true
+          if [[ -f "${RELATIVE_LOG_PATH}.err" ]]; then
+              mv "${RELATIVE_LOG_PATH}.err" "$TEST_TMP/" || true
+          fi
           LOG_SAVED_PATH="$TEST_TMP/$(basename "$RELATIVE_LOG_PATH")"
         fi
       fi
