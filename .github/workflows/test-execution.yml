@@ -66,10 +66,10 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
 
       - name: Create test environment
-        # Run all docker commands with sudo
         run: |
-          sudo docker run -d --name test-app-1 nginx:latest
-          sudo docker run -d --name test-app-2 nginx:alpine
+          for i in {1..5}; do
+            sudo docker run -d --name test-app-$i nginx:latest
+          done
           echo "Waiting for containers to start..."
           sleep 3
           sudo docker ps
@@ -96,6 +96,8 @@ jobs:
         if: always()
         run: |
           echo "Cleaning up test containers..."
-          sudo docker stop test-app-1 test-app-2 || true
-          sudo docker rm test-app-1 test-app-2 || true
+          for i in {1..5}; do
+            sudo docker stop test-app-$i || true
+            sudo docker rm test-app-$i || true
+          done
           sudo docker ps -a
