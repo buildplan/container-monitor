@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.74 ---
+# --- v0.75 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,8 +53,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.74"
-VERSION_DATE="2025-10-30"
+VERSION="v0.75"
+VERSION_DATE="2025-10-31"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1689,6 +1689,8 @@ perform_monitoring() {
 
     if [ ${#CONTAINERS_TO_CHECK[@]} -gt 0 ]; then
         local results_dir; results_dir=$(mktemp -d)
+        local progress_pipe="${results_dir}/progress_pipe"
+        trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
         if [ -f "$LOCK_FILE" ]; then
             local locked_pid; locked_pid=$(cat "$LOCK_FILE")
             if ! ps -p "$locked_pid" > /dev/null; then
@@ -1705,14 +1707,11 @@ perform_monitoring() {
             fi
             sleep 1
         done
-        trap 'rm -f "$LOCK_FILE"' EXIT
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
         fi
         local current_state_json; current_state_json=$(cat "$STATE_FILE")
-        rm -f "$LOCK_FILE"
-        trap - EXIT
         export -f perform_checks_for_container print_message check_container_status check_container_restarts \
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
@@ -1721,7 +1720,7 @@ perform_monitoring() {
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
-            mkfifo progress_pipe
+            mkfifo "$progress_pipe"
             (
 			    local spinner_chars=("|" "/" "-" "\\")
                 local spinner_idx=0
@@ -1743,18 +1742,17 @@ perform_monitoring() {
                     for ((j=0; j< (bar_len - bar_filled_len) ; j++)); do bar_empty+="░"; done
                     printf "\r${COLOR_GREEN}Progress: [%s%s] %3d%% (%d/%d) | Elapsed: %s [${spinner_char}]${COLOR_RESET}" \
                             "$bar_filled" "$bar_empty" "$percent" "$processed" "$total" "$elapsed_str"
-                done < progress_pipe
+                done < "$progress_pipe"
                     echo
             ) &
             local progress_pid=$!
-            exec 3> progress_pipe
+            exec 3> "$progress_pipe"
         fi
         export CURRENT_STATE_JSON_STRING="$current_state_json"
         printf "%s\n" "${CONTAINERS_TO_CHECK[@]}" | xargs -P 8 -I {} bash -c "perform_checks_for_container '{}' '$results_dir'; echo >&3"
         if [ "$SUMMARY_ONLY_MODE" = "false" ]; then
             exec 3>&-
             wait "$progress_pid"
-            rm progress_pipe
             echo
             print_message "${COLOR_BLUE}---------------------- Docker Container Monitoring Results ----------------------${COLOR_RESET}" "INFO"
             for container in "${CONTAINERS_TO_CHECK[@]}"; do
@@ -1807,7 +1805,6 @@ perform_monitoring() {
         local lock_acquired=false
         for ((i=0; i<LOCK_TIMEOUT_SECONDS*10; i++)); do
             if ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
-                trap 'rm -f "$LOCK_FILE"' EXIT
                 lock_acquired=true
                 break
             fi
@@ -1851,9 +1848,6 @@ perform_monitoring() {
             .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
         ' <<< "$new_state_json")
         echo "$new_state_json" > "$STATE_FILE"
-        rm -f "$LOCK_FILE"
-        trap - EXIT
-        rm -rf "$results_dir"
     else
         PRINT_MESSAGE_FORCE_STDOUT=true
         if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
