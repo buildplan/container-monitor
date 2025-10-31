@@ -60,7 +60,7 @@ jobs:
       - name: Install All Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y docker.io jq skopeo gawk coreutils wget
+          sudo apt-get install -y jq skopeo gawk coreutils wget
           # Install yq
           sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
           sudo chmod +x /usr/local/bin/yq
