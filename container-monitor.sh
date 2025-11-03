@@ -121,20 +121,35 @@ secure_config_file() {
     local required_perms="600"
     local current_perms
     if [[ ! -f "$config_file" ]]; then
-        print_message "WARNING: Config file not found: $config_file" WARNING
         return 0
     fi
-    current_perms=$(stat -c '%a' "$config_file" 2>/dev/null || stat -f '%OLp' "$config_file" 2>/dev/null | grep -o '[0-7]\{3\}$')
+    if current_perms=$(stat -c '%a' "$config_file" 2>/dev/null); then
+        :
+    elif current_perms=$(stat -f '%OLp' "$config_file" 2>/dev/null); then
+        current_perms=$(echo "$current_perms" | grep -o '[0-7]\{3\}$')
+    else
+        current_perms=""
+    fi
+    if [[ -z "$current_perms" ]]; then
+        return 0
+    fi
     if [[ "$current_perms" != "$required_perms" ]]; then
-        print_message "WARNING: Config file permissions are $current_perms (should be $required_perms). Attempting to fix..." WARNING
-        chmod 600 "$config_file" 2>/dev/null
-        if [[ $? -eq 0 ]]; then
-            print_message "Config file permissions fixed to 600." GOOD
+        if [[ -n "$(declare -f print_message)" ]]; then
+            print_message "WARNING: Config file permissions are $current_perms (should be $required_perms). Attempting to fix..." WARNING
+        fi
+        if chmod 600 "$config_file" 2>/dev/null; then
+            if [[ -n "$(declare -f print_message)" ]]; then
+                print_message "Config file permissions fixed to 600." GOOD
+            fi
         else
-            print_message "WARNING: Could not change config file permissions. Insufficient privileges or ownership issue. Continuing anyway..." WARNING
+            if [[ -n "$(declare -f print_message)" ]]; then
+                print_message "WARNING: Could not change config file permissions. Insufficient privileges or ownership issue. Continuing anyway..." WARNING
+            fi
         fi
     else
-        print_message "Config file permissions are secure ($required_perms)." GOOD
+        if [[ -n "$(declare -f print_message)" ]]; then
+            print_message "Config file permissions are secure ($required_perms)." GOOD
+        fi
     fi
     return 0
 }
