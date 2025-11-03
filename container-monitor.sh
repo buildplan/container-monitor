@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.75 ---
+# --- v0.76 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -53,8 +53,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.75"
-VERSION_DATE="2025-10-31"
+VERSION="v0.76"
+VERSION_DATE="2025-11-03"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -116,8 +116,46 @@ CONTAINER_NAMES=""
 declare -a CONTAINER_NAMES_FROM_CONFIG_FILE=()
 
 # --- Functions ---
+secure_config_file() {
+    local config_file="${1:-${SCRIPT_DIR}/config.yml}"
+    local required_perms="600"
+    local current_perms
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+    if current_perms=$(stat -c '%a' "$config_file" 2>/dev/null); then
+        :
+    elif current_perms=$(stat -f '%OLp' "$config_file" 2>/dev/null); then
+        current_perms=$(echo "$current_perms" | grep -o '[0-7]\{3\}$')
+    else
+        current_perms=""
+    fi
+    if [[ -z "$current_perms" ]]; then
+        return 0
+    fi
+    if [[ "$current_perms" != "$required_perms" ]]; then
+        if [[ -n "$(declare -f print_message)" ]]; then
+            print_message "WARNING: Config file permissions are $current_perms (should be $required_perms). Attempting to fix..." WARNING
+        fi
+        if chmod 600 "$config_file" 2>/dev/null; then
+            if [[ -n "$(declare -f print_message)" ]]; then
+                print_message "Config file permissions fixed to 600." GOOD
+            fi
+        else
+            if [[ -n "$(declare -f print_message)" ]]; then
+                print_message "WARNING: Could not change config file permissions. Insufficient privileges or ownership issue. Continuing anyway..." WARNING
+            fi
+        fi
+    else
+        if [[ -n "$(declare -f print_message)" ]]; then
+            print_message "Config file permissions are secure ($required_perms)." GOOD
+        fi
+    fi
+    return 0
+}
 load_configuration() {
     _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
+    secure_config_file "$_CONFIG_FILE_PATH"
 
     if [ -f "$_CONFIG_FILE_PATH" ] && ! yq e '.' "$_CONFIG_FILE_PATH" >/dev/null 2>&1; then
         print_message "Invalid syntax in config.yml. Please check the file for errors." "DANGER"
