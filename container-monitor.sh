@@ -272,7 +272,7 @@ print_help() {
     printf '  %-64s %s\n' "${COLOR_YELLOW}--save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save a container's full logs to a timestamped file.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune command interactively.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--check-setup${COLOR_RESET}" "${COLOR_CYAN}- Verify dependencies and script configuration.${COLOR_RESET}"
-    printf ' %-64s %s\n' "${COLOR_YELLOW}--setup-timer${COLOR_RESET}" "${COLOR_CYAN}- Install cron job or systemd timer for automated monitoring.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--setup-timer${COLOR_RESET}" "${COLOR_CYAN}- Install cron job or systemd timer for automated monitoring.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}-h, --help${COLOR_RESET}" "${COLOR_CYAN}- Show this help message.${COLOR_RESET}"
 
     printf '\n%bModifiers:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
