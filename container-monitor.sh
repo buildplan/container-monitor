@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.76 ---
+# --- v0.77 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -29,6 +29,7 @@ export LC_ALL=C
 # Usage:
 #   ./container-monitor.sh                               - Monitor based on config (or all running)
 #   ./container-monitor.sh --check-setup                 - Check the script setup and dependencies.
+#   ./container-monitor.sh --setup-timer                 - Setup cronjob or systemd timer.
 #   ./container-monitor.sh <container1> <container2> ... - Monitor specific containers (full output)
 #   ./container-monitor.sh --pull                        - Choose which containers to update (only pull new image, manually recreate)
 #   ./container-monitor.sh --update                      - Choose which containers to update and recreate (pull and recreate container)
@@ -53,8 +54,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.76"
-VERSION_DATE="2025-11-03"
+VERSION="v0.77"
+VERSION_DATE="2025-11-04"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -271,6 +272,7 @@ print_help() {
     printf '  %-64s %s\n' "${COLOR_YELLOW}--save-logs <container>${COLOR_RESET}" "${COLOR_CYAN}- Save a container's full logs to a timestamped file.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--prune${COLOR_RESET}" "${COLOR_CYAN}- Run Docker's system prune command interactively.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--check-setup${COLOR_RESET}" "${COLOR_CYAN}- Verify dependencies and script configuration.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--setup-timer${COLOR_RESET}" "${COLOR_CYAN}- Install cron job or systemd timer for automated monitoring.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}-h, --help${COLOR_RESET}" "${COLOR_CYAN}- Show this help message.${COLOR_RESET}"
 
     printf '\n%bModifiers:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -542,6 +544,339 @@ run_setup_check() {
         print_message "Setup check passed. The script is ready to run." "GOOD"
     else
         print_message "Setup check failed. Please address the errors (✖) above." "DANGER"
+        return 1
+    fi
+}
+setup_automated_schedule() {
+    print_message "--- Container Monitor Automation Setup ---" "INFO"
+    echo
+    local SCRIPT_PATH
+    SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"
+    if [ ! -f "$SCRIPT_PATH" ]; then
+        print_message "Error: Cannot determine script path." "DANGER"
+        return 1
+    fi
+    print_message "Script location: $SCRIPT_PATH" "INFO"
+    echo
+    echo -e "${COLOR_CYAN}Select scheduler type:${COLOR_RESET}"
+    echo "  1) cron (traditional, simple)"
+    echo "  2) systemd timer (modern, recommended for systemd-based systems)"
+    echo
+    read -rp "Enter your choice (1 or 2): " scheduler_choice
+    case "$scheduler_choice" in
+        1)
+            setup_cron_schedule "$SCRIPT_PATH"
+            ;;
+        2)
+            setup_systemd_timer "$SCRIPT_PATH"
+            ;;
+        *)
+            print_message "Invalid choice. Exiting." "DANGER"
+            return 1
+            ;;
+    esac
+}
+setup_cron_schedule() {
+    local script_path="$1"
+    print_message "Setting up cron job..." "INFO"
+    echo
+    if ! command -v crontab &>/dev/null; then
+        print_message "Error: crontab command not found. Please install cron first." "DANGER"
+        return 1
+    fi
+    echo -e "${COLOR_CYAN}Select monitoring frequency:${COLOR_RESET}"
+    echo "  1) Every 6 hours"
+    echo "  2) Every 12 hours"
+    echo "  3) Once a day (at midnight)"
+    echo "  4) Twice a day (at 6 AM and 6 PM)"
+    echo "  5) Custom (you specify the cron expression)"
+    echo
+    read -rp "Enter your choice (1-5): " freq_choice
+    local cron_expression=""
+    local description=""
+    case "$freq_choice" in
+        1)
+            cron_expression="0 */6 * * *"
+            description="every 6 hours"
+            ;;
+        2)
+            cron_expression="0 */12 * * *"
+            description="every 12 hours"
+            ;;
+        3)
+            cron_expression="0 0 * * *"
+            description="once a day at midnight"
+            ;;
+        4)
+            cron_expression="0 6,18 * * *"
+            description="twice a day at 6 AM and 6 PM"
+            ;;
+        5)
+            echo
+            echo -e "${COLOR_YELLOW}Cron expression format:${COLOR_RESET}"
+            echo "  ┌───────────── minute (0 - 59)"
+            echo "  │ ┌───────────── hour (0 - 23)"
+            echo "  │ │ ┌───────────── day of the month (1 - 31)"
+            echo "  │ │ │ ┌───────────── month (1 - 12)"
+            echo "  │ │ │ │ ┌───────────── day of the week (0 - 6) (Sunday to Saturday)"
+            echo "  │ │ │ │ │"
+            echo "  * * * * *"
+            echo
+            echo "Examples:"
+            echo "  0 */4 * * *     - Every 4 hours"
+            echo "  30 2 * * *      - At 2:30 AM every day"
+            echo "  0 9,17 * * 1-5  - At 9 AM and 5 PM on weekdays"
+            echo
+            read -rp "Enter your custom cron expression: " cron_expression
+            description="custom schedule ($cron_expression)"
+            ;;
+        *)
+            print_message "Invalid choice. Exiting." "DANGER"
+            return 1
+            ;;
+    esac
+    local cron_command="$cron_expression $script_path --summary >> $LOG_FILE 2>&1"
+    echo
+    print_message "The following cron job will be added:" "INFO"
+    echo -e "  ${COLOR_YELLOW}$cron_command${COLOR_RESET}"
+    echo -e "  ${COLOR_CYAN}(Runs $description)${COLOR_RESET}"
+    echo
+    read -rp "Do you want to proceed? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        print_message "Installation cancelled." "WARNING"
+        return 0
+    fi
+    local existing_cron
+    existing_cron=$(crontab -l 2>/dev/null | grep -F "$script_path" || true)
+    if [ -n "$existing_cron" ]; then
+        print_message "Found existing cron job for this script:" "WARNING"
+        echo -e "  ${COLOR_YELLOW}$existing_cron${COLOR_RESET}"
+        echo
+        read -rp "Do you want to replace it? (y/n): " replace
+        if [[ "$replace" =~ ^[yY]$ ]]; then
+            (crontab -l 2>/dev/null | grep -vF "$script_path") | crontab - 2>/dev/null
+            print_message "Old cron job removed." "GOOD"
+        else
+            print_message "Keeping existing cron job. No changes made." "INFO"
+            return 0
+        fi
+    fi
+    (crontab -l 2>/dev/null; echo "$cron_command") | crontab -
+    if [ $? -eq 0 ]; then
+        print_message "Cron job installed successfully!" "GOOD"
+        echo
+        print_message "Your container monitor will now run $description" "INFO"
+        print_message "Logs will be written to: $LOG_FILE" "INFO"
+        echo
+        print_message "To view or edit your cron jobs, run: crontab -e" "INFO"
+        print_message "To remove this cron job, run: crontab -e and delete the line containing '$script_path'" "INFO"
+    else
+        print_message "Failed to install cron job." "DANGER"
+        return 1
+    fi
+}
+setup_systemd_timer() {
+    local script_path="$1"
+    print_message "Setting up systemd timer..." "INFO"
+    echo
+    if ! command -v systemctl &>/dev/null; then
+        print_message "Error: systemctl command not found. This system may not use systemd." "DANGER"
+        print_message "Please use the cron option instead." "INFO"
+        return 1
+    fi
+    local use_user_service=false
+    local systemd_dir=""
+    local systemctl_cmd="systemctl"
+
+    echo -e "${COLOR_CYAN}Install as:${COLOR_RESET}"
+    echo "  1) System service (requires root/sudo, runs for all users)"
+    echo "  2) User service (runs only for current user, no sudo required)"
+    echo
+    read -rp "Enter your choice (1 or 2): " service_type
+
+    case "$service_type" in
+        1)
+            systemd_dir="/etc/systemd/system"
+            systemctl_cmd="sudo systemctl"
+            ;;
+        2)
+            use_user_service=true
+            systemd_dir="${HOME}/.config/systemd/user"
+            systemctl_cmd="systemctl --user"
+            mkdir -p "$systemd_dir"
+            ;;
+        *)
+            print_message "Invalid choice. Exiting." "DANGER"
+            return 1
+            ;;
+    esac
+    echo
+    echo -e "${COLOR_CYAN}Select monitoring frequency:${COLOR_RESET}"
+    echo "  1) Every 6 hours"
+    echo "  2) Every 12 hours"
+    echo "  3) Once a day (at midnight)"
+    echo "  4) Twice a day (at 6 AM and 6 PM)"
+    echo "  5) Every 4 hours"
+    echo "  6) Custom interval"
+    echo
+    read -rp "Enter your choice (1-6): " freq_choice
+    local timer_oncalendar=""
+    local description=""
+    case "$freq_choice" in
+        1)
+            timer_oncalendar="*-*-* 00/6:00:00"
+            description="every 6 hours"
+            ;;
+        2)
+            timer_oncalendar="*-*-* 00/12:00:00"
+            description="every 12 hours"
+            ;;
+        3)
+            timer_oncalendar="daily"
+            description="once a day at midnight"
+            ;;
+        4)
+            timer_oncalendar="*-*-* 06,18:00:00"
+            description="twice a day at 6 AM and 6 PM"
+            ;;
+        5)
+            timer_oncalendar="*-*-* 00/4:00:00"
+            description="every 4 hours"
+            ;;
+        6)
+            echo
+            echo -e "${COLOR_YELLOW}Systemd timer OnCalendar format examples:${COLOR_RESET}"
+            echo "  hourly              - Every hour"
+            echo "  daily               - Every day at midnight"
+            echo "  weekly              - Every week on Monday at midnight"
+            echo "  *-*-* 00/2:00:00    - Every 2 hours"
+            echo "  *-*-* 08:00:00      - Every day at 8 AM"
+            echo "  Mon,Fri 09:00:00    - Mondays and Fridays at 9 AM"
+            echo
+            echo "For more info: https://www.freedesktop.org/software/systemd/man/systemd.time.html"
+            echo
+            read -rp "Enter your custom OnCalendar value: " timer_oncalendar
+            description="custom schedule ($timer_oncalendar)"
+            ;;
+        *)
+            print_message "Invalid choice. Exiting." "DANGER"
+            return 1
+            ;;
+    esac
+    local service_name="container-monitor"
+    local service_file="${systemd_dir}/${service_name}.service"
+    local timer_file="${systemd_dir}/${service_name}.timer"
+    local service_content="[Unit]
+Description=Docker Container Monitor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=$script_path --summary
+StandardOutput=append:$LOG_FILE
+StandardError=append:$LOG_FILE
+
+[Install]
+WantedBy=multi-user.target"
+
+    if [ "$use_user_service" = true ]; then
+        service_content="[Unit]
+Description=Docker Container Monitor
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=$script_path --summary
+StandardOutput=append:$LOG_FILE
+StandardError=append:$LOG_FILE
+
+[Install]
+WantedBy=default.target"
+    fi
+
+    local timer_content="[Unit]
+Description=Docker Container Monitor Timer
+Requires=${service_name}.service
+
+[Timer]
+OnCalendar=$timer_oncalendar
+Persistent=true
+
+[Install]
+WantedBy=timers.target"
+
+    echo
+    print_message "The following systemd units will be created:" "INFO"
+    echo
+    echo -e "${COLOR_YELLOW}Service file: $service_file${COLOR_RESET}"
+    echo "$service_content"
+    echo
+    echo -e "${COLOR_YELLOW}Timer file: $timer_file${COLOR_RESET}"
+    echo "$timer_content"
+    echo
+    echo -e "  ${COLOR_CYAN}(Runs $description)${COLOR_RESET}"
+    echo
+    read -rp "Do you want to proceed? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        print_message "Installation cancelled." "WARNING"
+        return 0
+    fi
+    if [ -f "$service_file" ] || [ -f "$timer_file" ]; then
+        print_message "Systemd units already exist for this service." "WARNING"
+        read -rp "Do you want to replace them? (y/n): " replace
+        if [[ ! "$replace" =~ ^[yY]$ ]]; then
+            print_message "Installation cancelled." "WARNING"
+            return 0
+        fi
+        $systemctl_cmd stop ${service_name}.timer 2>/dev/null || true
+        $systemctl_cmd disable ${service_name}.timer 2>/dev/null || true
+    fi
+    if [ "$use_user_service" = true ]; then
+        echo "$service_content" > "$service_file"
+        echo "$timer_content" > "$timer_file"
+    else
+        echo "$service_content" | sudo tee "$service_file" > /dev/null
+        echo "$timer_content" | sudo tee "$timer_file" > /dev/null
+    fi
+
+    if [ $? -ne 0 ]; then
+        print_message "Failed to create systemd unit files." "DANGER"
+        return 1
+    fi
+    print_message "Systemd unit files created successfully." "GOOD"
+    print_message "Reloading systemd daemon..." "INFO"
+    $systemctl_cmd daemon-reload
+
+    if [ $? -ne 0 ]; then
+        print_message "Failed to reload systemd daemon." "DANGER"
+        return 1
+    fi
+    print_message "Enabling and starting the timer..." "INFO"
+    $systemctl_cmd enable ${service_name}.timer
+    $systemctl_cmd start ${service_name}.timer
+    if [ $? -eq 0 ]; then
+        print_message "Systemd timer installed and started successfully!" "GOOD"
+        echo
+        print_message "Your container monitor will now run $description" "INFO"
+        print_message "Logs will be written to: $LOG_FILE" "INFO"
+        echo
+        echo -e "${COLOR_CYAN}Useful commands:${COLOR_RESET}"
+        echo "  View timer status:  $systemctl_cmd status ${service_name}.timer"
+        echo "  View service logs:  $systemctl_cmd status ${service_name}.service"
+        if [ "$use_user_service" = false ]; then
+            echo "  View journal logs:  sudo journalctl -u ${service_name}.service"
+        else
+            echo "  View journal logs:  journalctl --user -u ${service_name}.service"
+        fi
+        echo "  Stop timer:         $systemctl_cmd stop ${service_name}.timer"
+        echo "  Disable timer:      $systemctl_cmd disable ${service_name}.timer"
+        echo "  Test service now:   $systemctl_cmd start ${service_name}.service"
+        echo
+        print_message "Next scheduled run:" "INFO"
+        $systemctl_cmd list-timers ${service_name}.timer
+    else
+        print_message "Failed to enable/start systemd timer." "DANGER"
         return 1
     fi
 }
@@ -1584,6 +1919,11 @@ main() {
                 ACTION="check-setup"
                 shift
                 ;;
+            --setup-timer)
+                if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions." "DANGER"; return 1; fi
+                ACTION="setup-timer"
+                shift
+                ;;
             --update|--pull)
                 if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --update and --logs." "DANGER"; return 1; fi
                 ACTION="interactive-update"
@@ -1658,6 +1998,10 @@ main() {
     case "$ACTION" in
         "check-setup")
             run_setup_check
+            ;;
+        setup-timer)
+            setup_automated_schedule
+            return $?
             ;;
         "prune")
             run_prune
