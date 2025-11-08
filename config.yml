@@ -5,6 +5,7 @@ general:
   log_file: "container-monitor.log"
   update_check_cache_hours: 6 # check for new updates after 6 hours
   lock_timeout_seconds: 30 # configurable lock timeout
+  healthchecks_job_url: "" # e.g., "https://hc.mydomain.com/ping/YOUR-KEY-HERE"
 
 # Custom patterns for the log checker.
 # If this section is omitted, the script defaults to checking for:
