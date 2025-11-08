@@ -2188,6 +2188,67 @@ perform_monitoring() {
                 CONTAINER_ISSUES_MAP["$container_name"]="$issues"
             fi
         done
+
+        # Ping Healthchecks.io (if configured)
+        if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
+            _get_canonical_issue_tag() {
+                local tag_string="$1"
+                case "${tag_string,,}" in
+                    updates*)   echo "Updates" ;;
+                    logs*)      echo "Logs" ;;
+                    status*)    echo "Status" ;;
+                    restarts*)  echo "Restarts" ;;
+                    resources*) echo "Resources" ;;
+                    disk*)      echo "Disk" ;;
+                    network*)   echo "Network" ;;
+                    *)          echo "" ;;
+                esac
+            }
+            local job_failed=false
+            local body=""
+            local job_fail_details=()
+            declare -A fail_on=()
+            if [[ -n "$HEALTHCHECKS_FAIL_ON" ]]; then
+                IFS=',' read -r -a fail_list <<< "$HEALTHCHECKS_FAIL_ON"
+                for f in "${fail_list[@]}"; do
+                    local canonical_tag
+                    canonical_tag=$(_get_canonical_issue_tag "$f")
+                    if [[ -n "$canonical_tag" ]]; then
+                        fail_on["$canonical_tag"]=1
+                    fi
+                done
+            fi
+            if [[ ${#fail_on[@]} -gt 0 && ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]]; then
+                for container in "${!CONTAINER_ISSUES_MAP[@]}"; do
+                    local container_fail_tags=()
+                    IFS='|' read -r -a issue_array <<< "${CONTAINER_ISSUES_MAP[$container]}"
+                    for it in "${issue_array[@]}"; do
+                        local canonical_tag
+                        canonical_tag=$(_get_canonical_issue_tag "$it")
+                        if [[ -n "$canonical_tag" && -n "${fail_on[$canonical_tag]:-}" ]]; then
+                            container_fail_tags+=("$canonical_tag")
+                        fi
+                    done
+                    if [[ ${#container_fail_tags[@]} -gt 0 ]]; then
+                        local tags_csv
+                        tags_csv=$(IFS=,; echo "${container_fail_tags[*]}")
+                        job_fail_details+=("${container}: ${tags_csv}")
+                        job_failed=true
+                    fi
+                done
+            fi
+            if [ "$job_failed" = true ]; then
+                printf -v body '%s\n' "${job_fail_details[@]}"
+
+                print_message "Healthcheck: Attempting job fail ping..." "INFO"
+                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "fail" "$body"
+            else
+                body="OK (Host: $(hostname))"
+                print_message "Healthcheck: Attempting job up ping..." "INFO"
+                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "up" "$body"
+            fi
+        fi
+
         print_summary "${#CONTAINERS_TO_CHECK[@]}"
         if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
@@ -2255,67 +2316,6 @@ perform_monitoring() {
                 fi
             fi
         fi
-
-        # Ping Healthchecks.io (if configured)
-        if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
-            _get_canonical_issue_tag() {
-                local tag_string="$1"
-                case "${tag_string,,}" in
-                    updates*)   echo "Updates" ;;
-                    logs*)      echo "Logs" ;;
-                    status*)    echo "Status" ;;
-                    restarts*)  echo "Restarts" ;;
-                    resources*) echo "Resources" ;;
-                    disk*)      echo "Disk" ;;
-                    network*)   echo "Network" ;;
-                    *)          echo "" ;;
-                esac
-            }
-            local job_failed=false
-            local body=""
-            local job_fail_details=()
-            declare -A fail_on=()
-            if [[ -n "$HEALTHCHECKS_FAIL_ON" ]]; then
-                IFS=',' read -r -a fail_list <<< "$HEALTHCHECKS_FAIL_ON"
-                for f in "${fail_list[@]}"; do
-                    local canonical_tag
-                    canonical_tag=$(_get_canonical_issue_tag "$f")
-                    if [[ -n "$canonical_tag" ]]; then
-                        fail_on["$canonical_tag"]=1
-                    fi
-                done
-            fi
-            if [[ ${#fail_on[@]} -gt 0 && ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]]; then
-                for container in "${!CONTAINER_ISSUES_MAP[@]}"; do
-                    local container_fail_tags=()
-                    IFS='|' read -r -a issue_array <<< "${CONTAINER_ISSUES_MAP[$container]}"
-                    for it in "${issue_array[@]}"; do
-                        local canonical_tag
-                        canonical_tag=$(_get_canonical_issue_tag "$it")
-                        if [[ -n "$canonical_tag" && -n "${fail_on[$canonical_tag]:-}" ]]; then
-                            container_fail_tags+=("$canonical_tag")
-                        fi
-                    done
-                    if [[ ${#container_fail_tags[@]} -gt 0 ]]; then
-                        local tags_csv
-                        tags_csv=$(IFS=,; echo "${container_fail_tags[*]}") 
-                        job_fail_details+=("${container}: ${tags_csv}")
-                        job_failed=true
-                    fi
-                done
-            fi
-            if [ "$job_failed" = true ]; then
-                printf -v body '%s\n' "${job_fail_details[@]}"
-
-                print_message "Healthcheck: Attempting job fail ping..." "INFO"
-                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "fail" "$body"
-            else
-                body="OK (Host: $(hostname))"
-                print_message "Healthcheck: Attempting job up ping..." "INFO"
-                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "up" "$body"
-            fi
-        fi
-
         local new_state_json; new_state_json=$(cat "$STATE_FILE")
         new_state_json=$(jq '.restarts = (.restarts // {}) | .logs = (.logs // {}) | .updates = (.updates // {})' <<< "$new_state_json")
         for restart_file in "$results_dir"/*.restarts; do
