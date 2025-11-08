@@ -1000,6 +1000,32 @@ send_notification() {
         "ntfy") send_ntfy_notification "$message" "$title" ;;
     esac
 }
+send_healthchecks_job_ping() {
+  local base_url="$1"
+  local status="$2"
+  local body="${3:-}"
+  base_url="${base_url%/}"
+  if [[ -z "$base_url" || ! "$base_url" =~ ^https?:// ]]; then
+    print_message "Healthchecks: job URL not set or invalid: '$base_url'." "WARNING"
+    return 0
+  fi
+  local endpoint="$base_url"
+  case "$status" in
+    start) endpoint+="/start" ;;
+    up)    endpoint+="/up" ;;
+    fail)  endpoint+="/fail" ;;
+    *)     : ;;
+  esac
+  if [[ -n "$body" ]]; then
+    (curl -fsS --connect-timeout 3 -m 8 --retry 1 \
+      --data-raw "$body" "$endpoint" >/dev/null 2>&1 || \
+      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING") &
+  else
+    (curl -fsS --connect-timeout 3 -m 8 --retry 1 \
+      "$endpoint" >/dev/null 2>&1 || \
+      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING") &
+  fi
+}
 self_update() {
     local latest_version="$1"
     local repo_owner="buildplan"
@@ -2095,6 +2121,9 @@ perform_monitoring() {
             sleep 1
         done
         trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
+        if [[ -n "$HEALTHCHECKS_JOB_URL" ]]; then
+          send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "start"
+        fi
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
@@ -2229,34 +2258,59 @@ perform_monitoring() {
 
         # Ping Healthchecks.io (if configured)
         if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
-            local job_fail_details=()
-            if [ -n "$HEALTHCHECKS_FAIL_ON" ]; then
-                if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
-                    local fail_pattern_regex
-                    fail_pattern_regex=$(echo "$HEALTHCHECKS_FAIL_ON" | sed 's/,/|/g')
-                    for container_name in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-                        local issues_string="${CONTAINER_ISSUES_MAP["$container_name"]:-}"
-                        local matching_issues
-                        matching_issues=$(echo "$issues_string" | tr '|' '\n' | sed 's/:.*//' | grep -E -x "$fail_pattern_regex" | paste -sd, -)
-                        if [ -n "$matching_issues" ]; then
-                            job_fail_details+=("${container_name}: ${matching_issues}")
+            _get_canonical_issue_tag() {
+                local tag_string="$1"
+                case "${tag_string,,}" in
+                    updates*)   echo "Updates" ;;
+                    logs*)      echo "Logs" ;;
+                    status*)    echo "Status" ;;
+                    restarts*)  echo "Restarts" ;;
+                    resources*) echo "Resources" ;;
+                    disk*)      echo "Disk" ;;
+                    network*)   echo "Network" ;;
+                    *)          echo "" ;;
+                esac
+            }
+            local job_failed=false
+            local body=""            
+            declare -A fail_on=()
+            if [[ -n "$HEALTHCHECKS_FAIL_ON" ]]; then
+                IFS=',' read -r -a fail_list <<< "$HEALTHCHECKS_FAIL_ON"
+                for f in "${fail_list[@]}"; do
+                    local canonical_tag
+                    canonical_tag=$(_get_canonical_issue_tag "$f")
+                    if [[ -n "$canonical_tag" ]]; then
+                        fail_on["$canonical_tag"]=1
+                    fi
+                done
+            fi
+            if [[ ${#fail_on[@]} -gt 0 && ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]]; then
+                declare -A found_tags=()
+                for container in "${!CONTAINER_ISSUES_MAP[@]}"; do
+                    IFS='|' read -r -a issue_array <<< "${CONTAINER_ISSUES_MAP[$container]}"
+                    for it in "${issue_array[@]}"; do
+                        local canonical_tag
+                        canonical_tag=$(_get_canonical_issue_tag "$it")
+                        if [[ -n "$canonical_tag" ]]; then
+                            found_tags["$canonical_tag"]=1
                         fi
                     done
-                fi
+                done
+                for tag in "${!fail_on[@]}"; do
+                    if [[ -n "${found_tags[$tag]:-}" ]]; then
+                        job_failed=true
+                        body="Failed on: $(IFS=,; echo "${!found_tags[*]}")"
+                        break
+                    fi
+                done
             fi
-            if [ ${#job_fail_details[@]} -gt 0 ]; then
-                local fail_body
-                printf -v fail_body '%s\n' "${job_fail_details[@]}"
-                print_message "Pinging Healthchecks.io with failure signal and details (Found issues matching 'healthchecks_fail_on')." "INFO"                
-                if ! curl -fsS -m 15 --retry 3 --data-raw "$fail_body" "${HEALTHCHECKS_JOB_URL}/fail" >/dev/null 2>>"$LOG_FILE"; then
-                    print_message "Healthchecks.io failure ping failed." "WARNING"
-                fi
+            if [ "$job_failed" = true ]; then
+                print_message "Healthcheck: Attempting job fail ping..." "INFO"
+                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "fail" "$body"
             else
-                print_message "Pinging Healthchecks.io to signal successful run." "INFO"
-                local success_body="OK (Host: $(hostname))"                
-                if ! curl -fsS -m 15 --retry 3 --data-raw "$success_body" "${HEALTHCHECKS_JOB_URL}" >/dev/null 2>>"$LOG_FILE"; then
-                    print_message "Healthchecks.io success ping failed." "WARNING"
-                fi
+                body="OK (Host: $(hostname))"
+                print_message "Healthcheck: Attempting job up ping..." "INFO"
+                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "up" "$body"
             fi
         fi
 
