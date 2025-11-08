@@ -2229,28 +2229,32 @@ perform_monitoring() {
 
         # Ping Healthchecks.io (if configured)
         if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
-            local job_should_fail=false
+            local job_fail_details=()
             if [ -n "$HEALTHCHECKS_FAIL_ON" ]; then
                 if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
                     local fail_pattern_regex
                     fail_pattern_regex=$(echo "$HEALTHCHECKS_FAIL_ON" | sed 's/,/|/g')
                     for container_name in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                         local issues_string="${CONTAINER_ISSUES_MAP["$container_name"]:-}"
-                        if echo "$issues_string" | tr '|' '\n' | sed 's/:.*//' | grep -q -E -x "$fail_pattern_regex"; then
-                            job_should_fail=true
-                            break
+                        local matching_issues
+                        matching_issues=$(echo "$issues_string" | tr '|' '\n' | sed 's/:.*//' | grep -E -x "$fail_pattern_regex" | tr '\n' ', ' | sed 's/, $//')
+                        if [ -n "$matching_issues" ]; then
+                            job_fail_details+=("${container_name}: ${matching_issues}")
                         fi
                     done
                 fi
             fi
-            if [ "$job_should_fail" = true ]; then
-                print_message "Pinging Healthchecks.io with failure signal (Found issues matching 'healthchecks_fail_on')." "INFO"
-                if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}/fail" >/dev/null 2>>"$LOG_FILE"; then
+            if [ ${#job_fail_details[@]} -gt 0 ]; then
+                local fail_body
+                printf -v fail_body '%s\n' "${job_fail_details[@]}"
+                print_message "Pinging Healthchecks.io with failure signal and details (Found issues matching 'healthchecks_fail_on')." "INFO"                
+                if ! curl -fsS -m 15 --retry 3 --data-raw "$fail_body" "${HEALTHCHECKS_JOB_URL}/fail" >/dev/null 2>>"$LOG_FILE"; then
                     print_message "Healthchecks.io failure ping failed." "WARNING"
                 fi
             else
                 print_message "Pinging Healthchecks.io to signal successful run." "INFO"
-                if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}" >/dev/null 2>>"$LOG_FILE"; then
+                local success_body="OK (Host: $(hostname))"                
+                if ! curl -fsS -m 15 --retry 3 --data-raw "$success_body" "${HEALTHCHECKS_JOB_URL}" >/dev/null 2>>"$LOG_FILE"; then
                     print_message "Healthchecks.io success ping failed." "WARNING"
                 fi
             fi
