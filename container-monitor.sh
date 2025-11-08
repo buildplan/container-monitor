@@ -2238,8 +2238,11 @@ perform_monitoring() {
                 done
             fi
             if [ "$job_failed" = true ]; then
-                printf -v body '%s\n' "${job_fail_details[@]}"
-
+                local fail_details
+                printf -v fail_details '%s\n' "${job_fail_details[@]}"
+                body="Host: $(hostname)
+---
+${fail_details}"
                 print_message "Healthcheck: Attempting job fail ping..." "INFO"
                 send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "fail" "$body"
             else
