@@ -207,6 +207,7 @@ load_configuration() {
     set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "~/.docker/config.json"
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
     set_final_config "HEALTHCHECKS_JOB_URL"          ".general.healthchecks_job_url"         ""
+    set_final_config "HEALTHCHECKS_FAIL_ON"          ".general.healthchecks_fail_on"         ""
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
@@ -2225,10 +2226,25 @@ perform_monitoring() {
                 fi
             fi
         fi
+
         # Ping Healthchecks.io (if configured)
         if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
-            if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
-                log_message "Pinging Healthchecks.io with failure signal."
+            local job_should_fail=false
+            if [ -n "$HEALTHCHECKS_FAIL_ON" ]; then
+                if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+                    local fail_pattern_regex
+                    fail_pattern_regex=$(echo "$HEALTHCHECKS_FAIL_ON" | sed 's/,/|/g')
+                    for container_name in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
+                        local issues_string="${CONTAINER_ISSUES_MAP["$container_name"]:-}"
+                        if echo "$issues_string" | tr '|' '\n' | sed 's/:.*//' | grep -q -E -x "$fail_pattern_regex"; then
+                            job_should_fail=true
+                            break
+                        fi
+                    done
+                fi
+            fi
+            if [ "$job_should_fail" = true ]; then
+                log_message "Pinging Healthchecks.io with failure signal (Found issues matching 'healthchecks_fail_on')."
                 if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}/fail" >/dev/null 2>>"$LOG_FILE"; then
                     log_message "WARNING: Healthchecks.io failure ping failed."
                 fi
@@ -2239,6 +2255,7 @@ perform_monitoring() {
                 fi
             fi
         fi
+
         local new_state_json; new_state_json=$(cat "$STATE_FILE")
         new_state_json=$(jq '.restarts = (.restarts // {}) | .logs = (.logs // {}) | .updates = (.updates // {})' <<< "$new_state_json")
         for restart_file in "$results_dir"/*.restarts; do
