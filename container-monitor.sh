@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.77 ---
+# --- v0.78 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -54,8 +54,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.77"
-VERSION_DATE="2025-11-04"
+VERSION="v0.78"
+VERSION_DATE="2025-11-08"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -206,6 +206,7 @@ load_configuration() {
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
     set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "~/.docker/config.json"
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
+    set_final_config "HEALTHCHECKS_JOB_URL"          ".general.healthchecks_job_url"         ""
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
@@ -1820,6 +1821,9 @@ print_summary() {
             print_message "No containers were monitored. No issues to report." "GOOD"
         fi
     fi
+    if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
+        print_message "  Healthcheck Ping: A job status ping was sent." "SUMMARY"
+    fi
     print_message "------------------------------------------------------------------------" "SUMMARY"
     PRINT_MESSAGE_FORCE_STDOUT=false
 }
@@ -2218,6 +2222,20 @@ perform_monitoring() {
                 if [ -n "$summary_message" ]; then
                     local notification_title="🚨 Container Monitor on $(hostname)"
                     send_notification "$summary_message" "$notification_title"
+                fi
+            fi
+        fi
+        # Ping Healthchecks.io (if configured)
+        if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
+            if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
+                log_message "Pinging Healthchecks.io with failure signal."
+                if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}/fail" >/dev/null 2>>"$LOG_FILE"; then
+                    log_message "WARNING: Healthchecks.io failure ping failed."
+                fi
+            else
+                log_message "Pinging Healthchecks.io to signal successful run."
+                if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}" >/dev/null 2>>"$LOG_FILE"; then
+                    log_message "WARNING: Healthchecks.io success ping failed."
                 fi
             fi
         fi
