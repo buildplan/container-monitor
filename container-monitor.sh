@@ -2244,14 +2244,14 @@ perform_monitoring() {
                 fi
             fi
             if [ "$job_should_fail" = true ]; then
-                log_message "Pinging Healthchecks.io with failure signal (Found issues matching 'healthchecks_fail_on')."
+                print_message "Pinging Healthchecks.io with failure signal (Found issues matching 'healthchecks_fail_on')." "INFO"
                 if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}/fail" >/dev/null 2>>"$LOG_FILE"; then
-                    log_message "WARNING: Healthchecks.io failure ping failed."
+                    print_message "Healthchecks.io failure ping failed." "WARNING"
                 fi
             else
-                log_message "Pinging Healthchecks.io to signal successful run."
+                print_message "Pinging Healthchecks.io to signal successful run." "INFO"
                 if ! curl -fsS -m 15 --retry 3 "${HEALTHCHECKS_JOB_URL}" >/dev/null 2>>"$LOG_FILE"; then
-                    log_message "WARNING: Healthchecks.io success ping failed."
+                    print_message "Healthchecks.io success ping failed." "WARNING"
                 fi
             fi
         fi
