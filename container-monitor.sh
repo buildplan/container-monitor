@@ -1012,8 +1012,8 @@ send_healthchecks_job_ping() {
   local endpoint="$base_url"
   case "$status" in
     start) endpoint+="/start" ;;
-    up)    endpoint+="/up" ;;
     fail)  endpoint+="/fail" ;;
+    up)    : ;;
     *)     : ;;
   esac
   if [[ -n "$body" ]]; then
