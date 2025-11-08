@@ -2272,7 +2272,8 @@ perform_monitoring() {
                 esac
             }
             local job_failed=false
-            local body=""            
+            local body=""
+            local job_fail_details=()
             declare -A fail_on=()
             if [[ -n "$HEALTHCHECKS_FAIL_ON" ]]; then
                 IFS=',' read -r -a fail_list <<< "$HEALTHCHECKS_FAIL_ON"
@@ -2285,26 +2286,27 @@ perform_monitoring() {
                 done
             fi
             if [[ ${#fail_on[@]} -gt 0 && ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]]; then
-                declare -A found_tags=()
                 for container in "${!CONTAINER_ISSUES_MAP[@]}"; do
+                    local container_fail_tags=()
                     IFS='|' read -r -a issue_array <<< "${CONTAINER_ISSUES_MAP[$container]}"
                     for it in "${issue_array[@]}"; do
                         local canonical_tag
                         canonical_tag=$(_get_canonical_issue_tag "$it")
-                        if [[ -n "$canonical_tag" ]]; then
-                            found_tags["$canonical_tag"]=1
+                        if [[ -n "$canonical_tag" && -n "${fail_on[$canonical_tag]:-}" ]]; then
+                            container_fail_tags+=("$canonical_tag")
                         fi
                     done
-                done
-                for tag in "${!fail_on[@]}"; do
-                    if [[ -n "${found_tags[$tag]:-}" ]]; then
+                    if [[ ${#container_fail_tags[@]} -gt 0 ]]; then
+                        local tags_csv
+                        tags_csv=$(IFS=,; echo "${container_fail_tags[*]}") 
+                        job_fail_details+=("${container}: ${tags_csv}")
                         job_failed=true
-                        body="Failed on: $(IFS=,; echo "${!found_tags[*]}")"
-                        break
                     fi
                 done
             fi
             if [ "$job_failed" = true ]; then
+                printf -v body '%s\n' "${job_fail_details[@]}"
+
                 print_message "Healthcheck: Attempting job fail ping..." "INFO"
                 send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "fail" "$body"
             else
