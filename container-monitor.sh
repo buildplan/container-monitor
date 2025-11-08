@@ -2237,7 +2237,7 @@ perform_monitoring() {
                     for container_name in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
                         local issues_string="${CONTAINER_ISSUES_MAP["$container_name"]:-}"
                         local matching_issues
-                        matching_issues=$(echo "$issues_string" | tr '|' '\n' | sed 's/:.*//' | grep -E -x "$fail_pattern_regex" | tr '\n' ', ' | sed 's/, $//')
+                        matching_issues=$(echo "$issues_string" | tr '|' '\n' | sed 's/:.*//' | grep -E -x "$fail_pattern_regex" | paste -sd, -)
                         if [ -n "$matching_issues" ]; then
                             job_fail_details+=("${container_name}: ${matching_issues}")
                         fi
