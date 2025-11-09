@@ -24,6 +24,7 @@ A Bash script to monitor Docker containers. It checks container health, resource
   - **Restart Tracking**: Only alerts on *new* container restarts, not old ones.
 - **Summary Report**: Provides a final summary with host-level stats and a list of containers with issues.
 - **Automated Scheduling**: Built-in setup wizard to install monitoring as a **systemd timer** or **cron job** with configurable frequency.
+- **Job Monitoring (Healthchecks.io):** Pings a monitoring URL at the start and end of each run (`/start`, `/fail`). It can be configured to only send a failure ping for *serious* issues (e.g., `Status`, `Restarts`) while ignoring minor ones (e.g., `Updates`).
 
 -----
 
@@ -167,6 +168,8 @@ You can override any setting from the YAML file by exporting an environment vari
 | `general.update_check_cache_hours`| `UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results. |
 | `general.lock_timeout_seconds`| `LOCK_TIMEOUT_SECONDS`| `10` | Seconds to wait for a lock file before exiting. |
 | `logs.log_clean_pattern`| `LOG_CLEAN_PATTERN`| `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
+| `general.healthchecks_job_url` | `HEALTHCHECKS_JOB_URL` | `(empty)` | The full URL for a Healthchecks.io job (e.g., `https://hc-ping.com/UUID-HERE`). |
+| `general.healthchecks_fail_on` | `HEALTHCHECKS_FAIL_ON` | `(empty)` | Comma-separated list of issues to trigger a `/fail` ping (e.g., `Status,Restarts`). If empty, pings success even if issues are found. |
 
 ### Thresholds & Monitoring
 

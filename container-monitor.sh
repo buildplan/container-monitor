@@ -2,7 +2,7 @@
 set -uo pipefail
 export LC_ALL=C
 
-# --- v0.77 ---
+# --- v0.78 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -54,8 +54,8 @@ export LC_ALL=C
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.77"
-VERSION_DATE="2025-11-04"
+VERSION="v0.78"
+VERSION_DATE="2025-11-08"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -206,6 +206,8 @@ load_configuration() {
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
     set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "~/.docker/config.json"
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
+    set_final_config "HEALTHCHECKS_JOB_URL"          ".general.healthchecks_job_url"         ""
+    set_final_config "HEALTHCHECKS_FAIL_ON"          ".general.healthchecks_fail_on"         ""
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
@@ -997,6 +999,32 @@ send_notification() {
         "discord") send_discord_notification "$message" "$title" ;;
         "ntfy") send_ntfy_notification "$message" "$title" ;;
     esac
+}
+send_healthchecks_job_ping() {
+  local base_url="$1"
+  local status="$2"
+  local body="${3:-}"
+  base_url="${base_url%/}"
+  if [[ -z "$base_url" || ! "$base_url" =~ ^https?:// ]]; then
+    print_message "Healthchecks: job URL not set or invalid: '$base_url'." "WARNING"
+    return 0
+  fi
+  local endpoint="$base_url"
+  case "$status" in
+    start) endpoint+="/start" ;;
+    fail)  endpoint+="/fail" ;;
+    up)    : ;;
+    *)     : ;;
+  esac
+  if [[ -n "$body" ]]; then
+    (curl -fsS --connect-timeout 3 -m 8 --retry 1 \
+      --data-raw "$body" "$endpoint" >/dev/null 2>&1 || \
+      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING") &
+  else
+    (curl -fsS --connect-timeout 3 -m 8 --retry 1 \
+      "$endpoint" >/dev/null 2>&1 || \
+      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING") &
+  fi
 }
 self_update() {
     local latest_version="$1"
@@ -1820,6 +1848,9 @@ print_summary() {
             print_message "No containers were monitored. No issues to report." "GOOD"
         fi
     fi
+    if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
+        print_message "  Healthcheck Ping: A job status ping was sent." "SUMMARY"
+    fi
     print_message "------------------------------------------------------------------------" "SUMMARY"
     PRINT_MESSAGE_FORCE_STDOUT=false
 }
@@ -2090,6 +2121,9 @@ perform_monitoring() {
             sleep 1
         done
         trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
+        if [[ -n "$HEALTHCHECKS_JOB_URL" ]]; then
+          send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "start"
+        fi
         if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
             print_message "State file is missing or invalid. Creating a new one." "INFO"
             echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
@@ -2154,6 +2188,70 @@ perform_monitoring() {
                 CONTAINER_ISSUES_MAP["$container_name"]="$issues"
             fi
         done
+
+        # Ping Healthchecks.io (if configured)
+        if [ -n "$HEALTHCHECKS_JOB_URL" ]; then
+            _get_canonical_issue_tag() {
+                local tag_string="$1"
+                case "${tag_string,,}" in
+                    updates*)   echo "Updates" ;;
+                    logs*)      echo "Logs" ;;
+                    status*)    echo "Status" ;;
+                    restarts*)  echo "Restarts" ;;
+                    resources*) echo "Resources" ;;
+                    disk*)      echo "Disk" ;;
+                    network*)   echo "Network" ;;
+                    *)          echo "" ;;
+                esac
+            }
+            local job_failed=false
+            local body=""
+            local job_fail_details=()
+            declare -A fail_on=()
+            if [[ -n "$HEALTHCHECKS_FAIL_ON" ]]; then
+                IFS=',' read -r -a fail_list <<< "$HEALTHCHECKS_FAIL_ON"
+                for f in "${fail_list[@]}"; do
+                    local canonical_tag
+                    canonical_tag=$(_get_canonical_issue_tag "$f")
+                    if [[ -n "$canonical_tag" ]]; then
+                        fail_on["$canonical_tag"]=1
+                    fi
+                done
+            fi
+            if [[ ${#fail_on[@]} -gt 0 && ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]]; then
+                for container in "${!CONTAINER_ISSUES_MAP[@]}"; do
+                    local container_fail_tags=()
+                    IFS='|' read -r -a issue_array <<< "${CONTAINER_ISSUES_MAP[$container]}"
+                    for it in "${issue_array[@]}"; do
+                        local canonical_tag
+                        canonical_tag=$(_get_canonical_issue_tag "$it")
+                        if [[ -n "$canonical_tag" && -n "${fail_on[$canonical_tag]:-}" ]]; then
+                            container_fail_tags+=("$canonical_tag")
+                        fi
+                    done
+                    if [[ ${#container_fail_tags[@]} -gt 0 ]]; then
+                        local tags_csv
+                        tags_csv=$(IFS=,; echo "${container_fail_tags[*]}")
+                        job_fail_details+=("${container}: ${tags_csv}")
+                        job_failed=true
+                    fi
+                done
+            fi
+            if [ "$job_failed" = true ]; then
+                local fail_details
+                printf -v fail_details '%s\n' "${job_fail_details[@]}"
+                body="Host: $(hostname)
+---
+${fail_details}"
+                print_message "Healthcheck: Attempting job fail ping..." "INFO"
+                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "fail" "$body"
+            else
+                body="OK (Host: $(hostname))"
+                print_message "Healthcheck: Attempting job up ping..." "INFO"
+                send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "up" "$body"
+            fi
+        fi
+
         print_summary "${#CONTAINERS_TO_CHECK[@]}"
         if [ ${#WARNING_OR_ERROR_CONTAINERS[@]} -gt 0 ]; then
             local summary_message=""
