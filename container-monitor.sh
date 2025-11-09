@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
-set -euo pipefail
+set -uo pipefail
 
 # --- v0.79 ---
 # Description:
