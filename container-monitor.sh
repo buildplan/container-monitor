@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.79 ---
+# --- v0.80 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -44,6 +44,7 @@ set -uo pipefail
 #   ./container-monitor.sh --prune                       - Run Docker's system prune to clean up unused resources.
 #   ./container-monitor.sh --force                       - Bypass cache and force a new check for image updates
 #   ./container-monitor.sh --no-update                   - Run without checking for a script update.
+#   ./container-monitor.sh --auto-update                 - Automatically update containers with floating tags (e.g. latest).
 #   ./container-monitor.sh --help [or -h]                - Shows script usage commands.
 #
 # Prerequisites:
@@ -55,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.79"
-VERSION_DATE="2025-11-09"
+VERSION="v0.80"
+VERSION_DATE="2025-12-10"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -219,6 +220,13 @@ load_configuration() {
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
     set_final_config "HEALTHCHECKS_JOB_URL"          ".general.healthchecks_job_url"         ""
     set_final_config "HEALTHCHECKS_FAIL_ON"          ".general.healthchecks_fail_on"         ""
+    set_final_config "AUTO_UPDATE_ENABLED"           ".auto_update.enabled"                  "false"
+
+    mapfile -t AUTO_UPDATE_TAGS < <(yq e '.auto_update.tags[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+    if [ ${#AUTO_UPDATE_TAGS[@]} -eq 0 ]; then AUTO_UPDATE_TAGS=("latest" "stable" "main" "master" "nightly"); fi
+
+    mapfile -t AUTO_UPDATE_INCLUDE < <(yq e '.auto_update.include[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+    mapfile -t AUTO_UPDATE_EXCLUDE < <(yq e '.auto_update.exclude[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
@@ -279,6 +287,7 @@ print_help() {
 
     printf '\n%bActions:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--update${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull and recreate containers with updates.${COLOR_RESET}"
+    printf '  %-64s %s\n' "${COLOR_YELLOW}--auto-update${COLOR_RESET}" "${COLOR_CYAN}- Automatically update containers with floating tags (e.g. latest).${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--pull${COLOR_RESET}" "${COLOR_CYAN}- Interactively pull new images only (no recreation).${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--summary [container...]${COLOR_RESET}" "${COLOR_CYAN}- Show only the final summary report, hiding individual checks.${COLOR_RESET}"
     printf '  %-64s %s\n' "${COLOR_YELLOW}--logs <container> [pattern...]${COLOR_RESET}" "${COLOR_CYAN}- Show recent logs for a container, with optional text filters.${COLOR_RESET}"
@@ -1918,6 +1927,69 @@ perform_checks_for_container() {
         (IFS='|'; echo "${issue_tags[*]}") > "$results_dir/$container_actual_name.issues"
     fi
 }
+run_auto_update_mode() {
+    if [ "$AUTO_UPDATE_ENABLED" != "true" ]; then
+        print_message "Auto-update is disabled in config.yml." "WARNING"
+        return
+    fi
+    print_message "--- Starting Auto-Update Process ---" "INFO"
+    if [ ! -f "$STATE_FILE" ] || ! jq -e . "$STATE_FILE" >/dev/null 2>&1; then
+        echo '{"updates": {}, "restarts": {}, "logs": {}}' > "$STATE_FILE"
+    fi
+    local state_json; state_json=$(cat "$STATE_FILE")
+    mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
+    local updates_performed=0
+    for container in "${all_containers[@]}"; do
+        local skipped=false
+        for pattern in "${AUTO_UPDATE_EXCLUDE[@]}"; do
+            if [[ "$container" =~ $pattern ]]; then skipped=true; break; fi
+        done
+        if [ "$skipped" = true ]; then continue; fi
+        if [ ${#AUTO_UPDATE_INCLUDE[@]} -gt 0 ]; then
+            local included=false
+            for pattern in "${AUTO_UPDATE_INCLUDE[@]}"; do
+                if [[ "$container" =~ $pattern ]]; then included=true; break; fi
+            done
+            if [ "$included" = false ]; then continue; fi
+        fi
+        local compose_project
+        compose_project=$(docker inspect "$container" 2>/dev/null | jq -r '.[0].Config.Labels["com.docker.compose.project"] // empty')
+        if [ -z "$compose_project" ]; then
+            continue
+        fi
+        local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
+        local tag_eligible=false
+        for tag in "${AUTO_UPDATE_TAGS[@]}"; do
+            if [[ "$current_image" == *":$tag" ]] || [[ "$current_image" == *"$tag"* ]]; then
+                tag_eligible=true; break
+            fi
+        done
+        if [ "$tag_eligible" = false ]; then continue; fi
+        local old_force_flag="$FORCE_UPDATE_CHECK"
+        FORCE_UPDATE_CHECK=true
+        local update_details
+        update_details=$(check_for_updates "$container" "$current_image" "$state_json" 2>&1 | tail -n 1)
+        local update_status=$?
+        FORCE_UPDATE_CHECK="$old_force_flag"
+        if [ $update_status -ne 0 ]; then
+            print_message "Auto-updating '$container'..." "INFO"
+            process_container_update "$container" "$update_details"
+            if [ "$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)" == "running" ]; then
+                updates_performed=$((updates_performed + 1))
+                send_notification "Container '$container' auto-updated successfully." "🚀 Auto-Update"
+            else
+                send_notification "Auto-update failed for '$container'. Check logs." "❌ Auto-Update Failed"
+            fi
+        fi
+    done
+    if [ "$updates_performed" -gt 0 ]; then
+        print_message "Cleaning up unused images..." "INFO"
+        docker image prune -f > /dev/null 2>&1
+        print_message "Auto-update complete. $updates_performed containers updated." "GOOD"
+    else
+        print_message "No auto-updates required." "INFO"
+    fi
+}
 
 # --- Main Execution ---
 main() {
@@ -1952,6 +2024,11 @@ main() {
                 ;;
             --summary)
                 SUMMARY_ONLY_MODE=true
+                shift
+                ;;
+            --auto-update)
+                if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions." "DANGER"; return 1; fi
+                ACTION="auto-update"
                 shift
                 ;;
 
@@ -2067,6 +2144,9 @@ main() {
             ;;
         "monitor")
             perform_monitoring "${CONTAINER_ARGS[@]}"
+            ;;
+        "auto-update")
+            run_auto_update_mode
             ;;
     esac
 }
