@@ -1382,7 +1382,7 @@ check_for_updates() {
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
     get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
-    if [[ "$current_tag" =~ ^(latest|stable|rolling)$ ]]; then
+    if [[ "$current_tag" =~ ^(latest|stable|rolling|main|master|nightly|edge)$ ]]; then
         strategy="digest"
     fi
     local latest_stable_version=""
@@ -1608,7 +1608,7 @@ pull_new_image() {
 }
 is_rolling_tag() {
     local image_ref="$1"
-    if [[ "$image_ref" =~ :(latest|stable|rolling|dev|edge|nightly)(-.+)?$ ]]; then
+    if [[ "$image_ref" =~ :(latest|stable|rolling|dev|edge|nightly|main|master)(-.+)?$ ]]; then
         return 0
     else
         return 1
