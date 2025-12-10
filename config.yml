@@ -110,3 +110,24 @@ containers:
     updates:
       - my-local-app-1     # Name of your locally built container
       - my-backend-api     # Any other you want to skip
+
+auto_update:
+  enabled: false
+  # Only auto-update containers that use these "floating" tags
+  tags:
+    - "latest"
+    - "stable"
+    - "main"
+    - "master"
+    - "nightly"
+  # Explicitly include containers (supports regex). 
+  # If this list is populated, ONLY these will be updated.
+  include: []  # <--- remove [] to enable include
+  #  - "my-app-.*"
+  #  - "dozzle"
+  
+  # Exclude specific containers from auto-updates
+  exclude:
+    - "postgres"  # Databases should usually be updated manually
+    - "mongo"
+    - "redis"
