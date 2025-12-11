@@ -14,6 +14,7 @@ A Bash script to monitor Docker containers. It checks container health, resource
 - **Advanced Update Detection**: Uses `skopeo` to check for new image versions for both `:latest` and version-pinned tags.
 - **Release Note Integration**: Displays a direct link to release notes when an update is available.
 - **Interactive Updates**: A special mode (`--pull` or `--update`) to scan for all available updates and let you choose which new images to pull & recreate.
+- **Auto-Updates**: Optionally automate updates for containers using floating tags (like `:latest`). It strictly targets **Docker Compose** containers to ensure configuration is preserved, includes configurable include/exclude lists, and automatically cleans up old images after a successful update.
 - **Comprehensive Health Monitoring**: Checks container status, health checks (`healthy`/`unhealthy`), and restart counts.
 - **Resource & Log Scanning**: Monitors CPU, memory, disk usage, and network errors against configurable thresholds, and scans logs for error keywords.
 - **Self-Updating**: The script can check its source repository and prompt you to update to the latest version.
@@ -221,6 +222,8 @@ The script offers several modes of operation via command-line flags.
   `./container-monitor.sh --pull`
 - **Interactive Update Mode**: Scans for updates and lets you choose which containers to **pull and recreate** using Docker Compose.
   `./container-monitor.sh --update`
+- **Auto-Update Mode**: Automatically pulls and recreates containers that match your auto-update configuration (floating tags only).
+  `./container-monitor.sh --auto-update`
 - **Skip Self-Update**: Runs the script without checking for a new version of itself.
   `./container-monitor.sh --no-update`
 
@@ -341,6 +344,37 @@ Then enable the timer: `sudo systemctl enable --now container-monitor.timer`
 
 -----
 
+## Auto-Update Setup
+
+The auto-update feature is designed to run independently from the monitoring checks. You can schedule it to run at off-peak hours (e.g., 3 AM).
+
+### 1. Configure `config.yml`
+
+Enable the feature and define your safety rules:
+
+```yaml
+auto_update:
+  enabled: true
+  # Only update containers with these tags
+  tags: ["latest", "stable", "main"]
+  # Exclude critical services
+  exclude:
+    - "postgres"
+    - "mongo"
+```
+
+### 2. Schedule the Job
+
+Add a separate cron job or timer to run the update command.
+
+**Example Cron (Daily at 3 AM):**
+
+```bash
+0 3 * * * /path/to/container-monitor.sh --auto-update >> /var/log/container-monitor-updates.log 2>&1
+```
+
+-----
+
 ## Example Summary Output
 
 ```bash
@@ -393,6 +427,23 @@ Enter the number(s) of the containers to update (e.g., '1' or '1,3'), or 'all', 
 [+] Running 1/1
  ✔ Container dozzle-agent  Started                                                                                          1.4s 
 [GOOD] Container 'dozzle-agent' successfully updated and recreated. ✅
+```
+
+### Example Auto-Update Output
+
+```bash
+$ ./container-monitor.sh --auto-update
+[INFO] --- Starting Auto-Update Process ---
+[INFO] Auto-updating 'dozzle-agent'...
+[INFO] Starting guided update for 'dozzle-agent'...
+[INFO] Image uses a rolling tag. Proceeding with standard pull and recreate.
+[+] Pulling 5/5
+ ✔ dozzle-agent Pulled                               4.2s 
+[+] Running 1/1
+ ✔ Container dozzle-agent  Started                   1.1s 
+[GOOD] Update verified: 'dozzle-agent' is running.
+[INFO] Cleaning up unused images...
+[GOOD] Auto-update complete. 1 containers updated.
 ```
 
 ## Logging
