@@ -2001,18 +2001,17 @@ run_auto_update_mode() {
         local host_name; host_name=$(hostname)
         local notif_title="🚀 Auto-Update Summary: ${host_name}"
         local notif_msg=""
-
         if [ ${#successful_updates[@]} -gt 0 ]; then
             notif_msg+="✅ Updated (${#successful_updates[@]}):"
             for c in "${successful_updates[@]}"; do
-                notif_msg+="\n  - $c"
+                notif_msg+=$'\n  - '"$c"
             done
         fi
         if [ ${#failed_updates[@]} -gt 0 ]; then
-            if [ -n "$notif_msg" ]; then notif_msg+="\n\n"; fi
+            if [ -n "$notif_msg" ]; then notif_msg+=$'\n\n'; fi
             notif_msg+="❌ Failed (${#failed_updates[@]}):"
             for c in "${failed_updates[@]}"; do
-                notif_msg+="\n  - $c"
+                notif_msg+=$'\n  - '"$c"
             done
         fi
         send_notification "$notif_msg" "$notif_title"
