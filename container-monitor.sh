@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.80 ---
+# --- v0.80.1 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.80"
-VERSION_DATE="2025-12-10"
+VERSION="v0.80.1"
+VERSION_DATE="2025-12-11"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1608,6 +1608,9 @@ pull_new_image() {
 }
 is_rolling_tag() {
     local image_ref="$1"
+    if [[ "$image_ref" != *":"* ]]; then
+        return 0
+    fi
     if [[ "$image_ref" =~ :(latest|stable|rolling|dev|edge|nightly|main|master)(-.+)?$ ]]; then
         return 0
     else
@@ -1938,6 +1941,8 @@ run_auto_update_mode() {
     fi
     local state_json; state_json=$(cat "$STATE_FILE")
     mapfile -t all_containers < <(docker container ls --format '{{.Names}}' 2>/dev/null)
+    local successful_updates=()
+    local failed_updates=()
     local updates_performed=0
     for container in "${all_containers[@]}"; do
         local skipped=false
@@ -1959,11 +1964,19 @@ run_auto_update_mode() {
         fi
         local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
         local tag_eligible=false
-        for tag in "${AUTO_UPDATE_TAGS[@]}"; do
-            if [[ "$current_image" == *":$tag" ]] || [[ "$current_image" == *"$tag"* ]]; then
-                tag_eligible=true; break
-            fi
-        done
+        if [[ "$current_image" != *":"* ]]; then
+             for tag in "${AUTO_UPDATE_TAGS[@]}"; do
+                if [[ "$tag" == "latest" ]]; then
+                    tag_eligible=true; break
+                fi
+             done
+        else
+            for tag in "${AUTO_UPDATE_TAGS[@]}"; do
+                if [[ "$current_image" == *":$tag" ]] || [[ "$current_image" == *"$tag"* ]]; then
+                    tag_eligible=true; break
+                fi
+            done
+        fi
         if [ "$tag_eligible" = false ]; then continue; fi
         local old_force_flag="$FORCE_UPDATE_CHECK"
         FORCE_UPDATE_CHECK=true
@@ -1976,12 +1989,34 @@ run_auto_update_mode() {
             process_container_update "$container" "$update_details"
             if [ "$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)" == "running" ]; then
                 updates_performed=$((updates_performed + 1))
-                send_notification "Container '$container' auto-updated successfully." "🚀 Auto-Update"
+                successful_updates+=("$container")
+                print_message "Update verified: '$container' is running." "GOOD"
             else
-                send_notification "Auto-update failed for '$container'. Check logs." "❌ Auto-Update Failed"
+                failed_updates+=("$container")
+                print_message "Update check failed: '$container' is NOT running." "DANGER"
             fi
         fi
     done
+    if [ ${#successful_updates[@]} -gt 0 ] || [ ${#failed_updates[@]} -gt 0 ]; then
+        local host_name; host_name=$(hostname)
+        local notif_title="🚀 Auto-Update Summary: ${host_name}"
+        local notif_msg=""
+
+        if [ ${#successful_updates[@]} -gt 0 ]; then
+            notif_msg+="✅ Updated (${#successful_updates[@]}):"
+            for c in "${successful_updates[@]}"; do
+                notif_msg+="\n  - $c"
+            done
+        fi
+        if [ ${#failed_updates[@]} -gt 0 ]; then
+            if [ -n "$notif_msg" ]; then notif_msg+="\n\n"; fi
+            notif_msg+="❌ Failed (${#failed_updates[@]}):"
+            for c in "${failed_updates[@]}"; do
+                notif_msg+="\n  - $c"
+            done
+        fi
+        send_notification "$notif_msg" "$notif_title"
+    fi
     if [ "$updates_performed" -gt 0 ]; then
         print_message "Cleaning up unused images..." "INFO"
         docker image prune -f > /dev/null 2>&1
