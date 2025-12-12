@@ -236,6 +236,37 @@ The script offers several modes of operation via command-line flags.
 
 -----
 
+## Auto-Update Setup
+
+The auto-update feature is designed to run independently from the monitoring checks. You can schedule it to run at off-peak hours (e.g., 3 AM).
+
+### 1. Configure `config.yml`
+
+Enable the feature and define your safety rules:
+
+```yaml
+auto_update:
+  enabled: true
+  # Only update containers with these tags
+  tags: ["latest", "stable", "main"]
+  # Exclude critical services
+  exclude:
+    - "postgres"
+    - "mongo"
+```
+
+### 2. Schedule the Job
+
+Add a separate cron job or timer to run the update command.
+
+**Example Cron (Daily at 3 AM):**
+
+```bash
+0 3 * * * /path/to/container-monitor.sh --auto-update >> /var/log/container-monitor-updates.log 2>&1
+```
+
+-----
+
 ## Automation (Running as a Service)
 
 ### Automatic Setup with `--setup-timer`
@@ -341,37 +372,6 @@ Then enable the timer: `sudo systemctl enable --now container-monitor.timer`
   ```bash
   0 */6 * * * /path/to/your/container-monitor.sh --no-update --summary > /dev/null 2>&1
   ```
-
------
-
-## Auto-Update Setup
-
-The auto-update feature is designed to run independently from the monitoring checks. You can schedule it to run at off-peak hours (e.g., 3 AM).
-
-### 1. Configure `config.yml`
-
-Enable the feature and define your safety rules:
-
-```yaml
-auto_update:
-  enabled: true
-  # Only update containers with these tags
-  tags: ["latest", "stable", "main"]
-  # Exclude critical services
-  exclude:
-    - "postgres"
-    - "mongo"
-```
-
-### 2. Schedule the Job
-
-Add a separate cron job or timer to run the update command.
-
-**Example Cron (Daily at 3 AM):**
-
-```bash
-0 3 * * * /path/to/container-monitor.sh --auto-update >> /var/log/container-monitor-updates.log 2>&1
-```
 
 -----
 
