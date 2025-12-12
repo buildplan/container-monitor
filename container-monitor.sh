@@ -2133,6 +2133,15 @@ main() {
     done
 
     # --- Initial Setup ---
+    # Log Separation
+    if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+        {
+            echo ""
+            echo "========================================================================"
+            echo ""
+        } >> "$LOG_FILE" 2>/dev/null || true
+    fi
+
     check_and_install_dependencies
     load_configuration
 
