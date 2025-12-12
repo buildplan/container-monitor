@@ -120,12 +120,12 @@ auto_update:
     - "main"
     - "master"
     - "nightly"
-  # Explicitly include containers (supports regex). 
+  # Explicitly include containers (supports regex).
   # If this list is populated, ONLY these will be updated.
   include: []  # <--- remove [] to enable include
   #  - "my-app-.*"
   #  - "dozzle"
-  
+
   # Exclude specific containers from auto-updates
   exclude:
     - "postgres"  # Databases should usually be updated manually
