@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.80.3 ---
+# --- v0.80.4 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.80.3"
+VERSION="v0.80.4"
 VERSION_DATE="2025-12-13"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -225,7 +225,7 @@ load_configuration() {
     set_final_config "UPDATE_CHECK_CACHE_HOURS"      ".general.update_check_cache_hours"     "6"
     set_final_config "DOCKER_USERNAME"               ".auth.docker_username"                 ""
     set_final_config "DOCKER_PASSWORD"               ".auth.docker_password"                 ""
-    set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "~/.docker/config.json"
+    set_final_config "DOCKER_CONFIG_PATH"            ".auth.docker_config_path"              "$HOME/.docker/config.json"
     set_final_config "LOCK_TIMEOUT_SECONDS"          ".general.lock_timeout_seconds"         "10"
     set_final_config "HEALTHCHECKS_JOB_URL"          ".general.healthchecks_job_url"         ""
     set_final_config "HEALTHCHECKS_FAIL_ON"          ".general.healthchecks_fail_on"         ""
@@ -395,6 +395,44 @@ check_and_install_dependencies() {
     if ! command -v docker &>/dev/null; then
         print_message "Docker is not installed. This is a critical dependency. Please follow the official instructions at https://docs.docker.com/engine/install/" "DANGER"
         manual_install_needed=true
+    else
+        if ! docker info >/dev/null 2>&1; then
+            print_message "Docker is installed, but the current user ('$USER') cannot access the Docker daemon." "WARNING"
+            print_message "This usually means the user is not in the 'docker' group." "INFO"
+            if [ -t 0 ]; then
+                read -rp "Would you like to add '$USER' to the 'docker' group to fix this? (y/n): " response
+                if [[ "$response" =~ ^[yY]$ ]]; then
+                    print_message "Attempting to fix permissions..." "INFO"
+                    sudo groupadd docker 2>/dev/null || true
+                    if sudo usermod -aG docker "$USER"; then
+                        print_message "User '$USER' added to 'docker' group successfully." "GOOD"
+                        if [ -d "$HOME/.docker" ]; then
+                            print_message "Fixing ownership of ~/.docker directory..." "INFO"
+                            sudo chown -R "$USER":"$USER" "$HOME/.docker"
+                            sudo chmod -R g+rwx "$HOME/.docker"
+                        fi
+                        if command -v sg &>/dev/null; then
+                            print_message "Reloading script with new permissions..." "GOOD"
+                            local args_str=""
+                            printf -v args_str "%q " "$@"
+                            exec sg docker -c "$0 $args_str"
+                        else
+                            print_message "Could not auto-reload. Please run 'newgrp docker' or log out and back in." "WARNING"
+                            exit 0
+                        fi
+                    else
+                        print_message "Failed to add user to group. Please run: sudo usermod -aG docker $USER" "DANGER"
+                        manual_install_needed=true
+                    fi
+                else
+                    print_message "Skipping permission fix. You may need 'sudo' to run Docker commands." "WARNING"
+                    manual_install_needed=true
+                fi
+            else
+                print_message "Cannot fix permissions interactively. To fix, run: sudo usermod -aG docker $USER" "DANGER"
+                manual_install_needed=true
+            fi
+        fi
     fi
     for cmd in "${!deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -408,13 +446,13 @@ check_and_install_dependencies() {
                 read -rp "Would you like to attempt to install them now? (y/n): " response
                 if [[ "$response" =~ ^[yY]$ ]]; then
                     print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
-                    local install_cmd=()
+                    local install_success=false
                     if [ "$pkg_manager" == "apt" ]; then
-                       sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+                       sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}" && install_success=true
                     else
-                       sudo "$pkg_manager" install -y "${missing_pkgs[@]}"
+                       sudo "$pkg_manager" install -y "${missing_pkgs[@]}" && install_success=true
                     fi
-                    if [ $? -eq 0 ]; then
+                    if [ "$install_success" = true ]; then
                         print_message "Package manager dependencies installed successfully." "GOOD"
                     else
                         print_message "Failed to install dependencies. Please install them manually." "DANGER"
@@ -438,7 +476,7 @@ check_and_install_dependencies() {
         local tag_to_install="$2"
         print_message "Attempting to download yq... You may be prompted for your password." "INFO"
         if [ -z "$tag_to_install" ]; then
-             tag_to_install=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+             tag_to_install=$(curl -sL -o /dev/null -w "%{url_effective}" "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
         fi
         if [ -z "$tag_to_install" ]; then
             print_message "Failed to get the latest yq version tag from GitHub." "DANGER"
@@ -475,7 +513,7 @@ check_and_install_dependencies() {
     else
         print_message "Checking for yq updates..." "INFO"
         local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
-        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w "%{url_effective}" "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
         if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
             if [ -t 0 ]; then
                 local api_url="https://api.github.com/repos/mikefarah/yq/releases/tags/${latest_yq_tag}"
@@ -499,7 +537,7 @@ check_and_install_dependencies() {
                 local update_msg="A new version of yq is available: ${latest_yq_tag} (you have ${local_yq_version})."
                 print_message "$update_msg" "WARNING"
                 print_message "To update, run the script manually from your terminal." "INFO"
-                local notif_title="⚠️ Dependency Update Recommended on $(hostname)"
+                local notif_title; notif_title="⚠️ Dependency Update Recommended on $(hostname)"
                 send_notification "$update_msg" "$notif_title"
             fi
         elif [ -n "$local_yq_version" ]; then
@@ -542,7 +580,7 @@ run_setup_check() {
         all_ok=false
     else
         local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
-        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w %{url_effective} "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w "%{url_effective}" "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
         if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
             print_message "❕ yq has an update available: ${latest_yq_tag} (you have ${local_yq_version})." "WARNING"
             print_message "  Run the script manually to get an update prompt." "INFO"
@@ -964,17 +1002,20 @@ send_discord_notification() {
         print_message "Discord webhook URL is not configured." "DANGER"
         return
     fi
+    local current_date
+    current_date=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
     local json_payload
     json_payload=$(jq -n \
                   --arg title "$title" \
                   --arg description "$message" \
+                  --arg timestamp "$current_date" \
                   '{
                     "username": "Docker Monitor",
                     "embeds": [{
                       "title": $title,
                       "description": $description,
                       "color": 15158332,
-                      "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")'"
+                      "timestamp": $timestamp
                     }]
                   }')
     run_with_retry curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$DISCORD_WEBHOOK_URL" > /dev/null
@@ -1087,8 +1128,8 @@ self_update() {
         exit 1
     fi
     trap 'rm -rf -- "$temp_dir"' EXIT
-    local temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
-    local temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
+    local temp_script; temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
+    local temp_checksum; temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
     print_message "Downloading new script version..." "INFO"
     if ! curl -sL "$SCRIPT_URL" -o "$temp_script"; then
         print_message "Failed to download the new script. Update aborted." "DANGER"
@@ -1536,7 +1577,7 @@ check_logs() {
     fi
 }
 save_logs() {
-    local container_name="$1"; local log_file_name="${container_name}_logs_$(date '+%Y-%m-%d_%H-%M-%S').log"
+    local container_name="$1"; local log_file_name; log_file_name="${container_name}_logs_$(date '+%Y-%m-%d_%H-%M-%S').log"
     if docker logs "$container_name" > "$log_file_name" 2>"${log_file_name}.err"; then
         print_message "Logs for '$container_name' saved to '$log_file_name'." "GOOD"
     else
@@ -2037,6 +2078,7 @@ run_auto_update_mode() {
 # --- Main Execution ---
 main() {
     # --- Argument Parsing ---
+    local ORIGINAL_ARGS=("$@")
     declare -a CONTAINER_ARGS=()
     declare -a CONTAINERS_TO_EXCLUDE=()
     local ACTION="monitor" # Default action
@@ -2151,7 +2193,7 @@ main() {
         } >> "$LOG_FILE" 2>/dev/null || true
     fi
 
-    check_and_install_dependencies
+    check_and_install_dependencies "${ORIGINAL_ARGS[@]}"
     load_configuration
 
     # --- Self-Update Check ---
@@ -2457,7 +2499,7 @@ ${fail_details}"
             if [ "$notify_issues" = true ]; then
                 summary_message=$(echo -e "$summary_message" | sed 's/^[[:space:]]*//')
                 if [ -n "$summary_message" ]; then
-                    local notification_title="🚨 Container Monitor on $(hostname)"
+                    local notification_title; notification_title="🚨 Container Monitor on $(hostname)"
                     send_notification "$summary_message" "$notification_title"
                 fi
             fi
