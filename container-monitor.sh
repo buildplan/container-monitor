@@ -397,40 +397,61 @@ check_and_install_dependencies() {
         manual_install_needed=true
     else
         if ! docker info >/dev/null 2>&1; then
-            print_message "Docker is installed, but the current user ('$USER') cannot access the Docker daemon." "WARNING"
-            print_message "This usually means the user is not in the 'docker' group." "INFO"
-            if [ -t 0 ]; then
-                read -rp "Would you like to add '$USER' to the 'docker' group to fix this? (y/n): " response
-                if [[ "$response" =~ ^[yY]$ ]]; then
-                    print_message "Attempting to fix permissions..." "INFO"
-                    sudo groupadd docker 2>/dev/null || true
-                    if sudo usermod -aG docker "$USER"; then
-                        print_message "User '$USER' added to 'docker' group successfully." "GOOD"
-                        if [ -d "$HOME/.docker" ]; then
-                            print_message "Fixing ownership of ~/.docker directory..." "INFO"
-                            sudo chown -R "$USER":"$USER" "$HOME/.docker"
-                            sudo chmod -R g+rwx "$HOME/.docker"
-                        fi
-                        if command -v sg &>/dev/null; then
-                            print_message "Reloading script with new permissions..." "GOOD"
-                            local args_str=""
-                            printf -v args_str "%q " "$@"
-                            exec sg docker -c "$0 $args_str"
-                        else
-                            print_message "Could not auto-reload. Please run 'newgrp docker' or log out and back in." "WARNING"
-                            exit 0
-                        fi
-                    else
-                        print_message "Failed to add user to group. Please run: sudo usermod -aG docker $USER" "DANGER"
-                        manual_install_needed=true
-                    fi
+            if [ "${CONTAINER_MONITOR_RELOADED:-false}" = "true" ]; then
+                print_message "Critical: Script reloaded but permissions are still denied." "DANGER"
+                print_message "Automatic fix failed. Please log out and log back in manually." "DANGER"
+                manual_install_needed=true
+            elif id -nG "$USER" | grep -qw "docker"; then
+                print_message "User '$USER' is already in the 'docker' group, but the current shell session is stale." "INFO"
+                if command -v sg &>/dev/null; then
+                    print_message "Auto-reloading script to activate permissions..." "GOOD"
+                    local args_str=""
+                    printf -v args_str "%q " "$@"
+                    export CONTAINER_MONITOR_RELOADED=true
+                    exec sg docker -c "$0 $args_str"
                 else
-                    print_message "Skipping permission fix. You may need 'sudo' to run Docker commands." "WARNING"
+                    print_message "Cannot auto-reload. Please run 'newgrp docker' or log out/in." "WARNING"
                     manual_install_needed=true
                 fi
             else
-                print_message "Cannot fix permissions interactively. To fix, run: sudo usermod -aG docker $USER" "DANGER"
-                manual_install_needed=true
+                print_message "Docker is installed, but the current user ('$USER') cannot access the Docker daemon." "WARNING"
+                print_message "This usually means the user is not in the 'docker' group." "INFO"
+                if [ -t 0 ]; then
+                    read -rp "Would you like to add '$USER' to the 'docker' group to fix this? (y/n): " response
+                    if [[ "$response" =~ ^[yY]$ ]]; then
+                        print_message "Attempting to fix permissions..." "INFO"
+                        sudo groupadd docker 2>/dev/null || true
+                        if sudo usermod -aG docker "$USER"; then
+                            print_message "User '$USER' added to 'docker' group successfully." "GOOD"
+                            if [ -d "$HOME/.docker" ]; then
+                                print_message "Fixing ownership of ~/.docker directory..." "INFO"
+                                sudo chown -R "$USER":"$USER" "$HOME/.docker"
+                                sudo chmod -R g+rwx "$HOME/.docker"
+                            fi
+                            if command -v sg &>/dev/null; then
+                                print_message "Reloading script with new permissions..." "GOOD"
+                                local args_str=""
+                                printf -v args_str "%q " "$@"
+                                export CONTAINER_MONITOR_RELOADED=true
+                                exec sg docker -c "$0 $args_str"
+                            else
+                                print_message "Could not auto-reload. Please run 'newgrp docker' or log out and back in." "WARNING"
+                                exit 0
+                            fi
+                        else
+                            print_message "Failed to add user to group. Please run: sudo usermod -aG docker $USER" "DANGER"
+                            manual_install_needed=true
+                        fi
+                    else
+                        print_message "Skipping permission fix." "WARNING"
+                        print_message "To fix manually, run: sudo usermod -aG docker \$USER" "INFO"
+                        print_message "Then log out and back in." "INFO"
+                        manual_install_needed=true
+                    fi
+                else
+                    print_message "Cannot fix permissions interactively. To fix, run: sudo usermod -aG docker $USER" "DANGER"
+                    manual_install_needed=true
+                fi
             fi
         fi
     fi
