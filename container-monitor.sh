@@ -117,7 +117,7 @@ LOG_LINES_TO_CHECK="${LOG_LINES_TO_CHECK:-$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK}"
 CHECK_FREQUENCY_MINUTES="${CHECK_FREQUENCY_MINUTES:-$_SCRIPT_DEFAULT_CHECK_FREQUENCY_MINUTES}"
 # Pre-load of Log File
 if [ -z "${LOG_FILE:-}" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
-    PRELOAD_LOG=$(grep "log_file:" "$SCRIPT_DIR/config.yml" | head -n 1 | sed -E 's/.*log_file:[[:space:]]*["'\'']?([^"'\'']+)["'\'']?.*/\1/')
+    PRELOAD_LOG=$(grep -E "^[[:space:]]*log_file:" "$SCRIPT_DIR/config.yml" | head -n 1 | sed -E 's/.*log_file:[[:space:]]*["'\'']?([^"'\'']+)["'\'']?.*/\1/')
     if [ -n "$PRELOAD_LOG" ]; then
         if [[ "$PRELOAD_LOG" != /* ]]; then LOG_FILE="$SCRIPT_DIR/$PRELOAD_LOG"; else LOG_FILE="$PRELOAD_LOG"; fi
     fi
