@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.80.6 ---
+# --- v0.80.7 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.80.6"
+VERSION="v0.80.7"
 VERSION_DATE="2025-12-14"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -648,6 +648,19 @@ setup_automated_schedule() {
     fi
     print_message "Script location: $SCRIPT_PATH" "INFO"
     echo
+    echo -e "${COLOR_CYAN}What task do you want to schedule?${COLOR_RESET}"
+    echo "  1) Standard Monitoring (Checks health, resources, and sends alerts)"
+    echo "  2) Auto-Updater (Automatically updates and recreates containers)"
+    echo
+    local task_type="monitor"
+    local task_choice
+    read -rp "Enter your choice (1 or 2): " task_choice
+    case "$task_choice" in
+        1) task_type="monitor" ;;
+        2) task_type="update" ;;
+        *) print_message "Invalid choice." "DANGER"; return 1 ;;
+    esac
+    echo
     echo -e "${COLOR_CYAN}Select scheduler type:${COLOR_RESET}"
     echo "  1) cron (traditional, simple)"
     echo "  2) systemd timer (modern, recommended for systemd-based systems)"
@@ -655,10 +668,10 @@ setup_automated_schedule() {
     read -rp "Enter your choice (1 or 2): " scheduler_choice
     case "$scheduler_choice" in
         1)
-            setup_cron_schedule "$SCRIPT_PATH"
+            setup_cron_schedule "$SCRIPT_PATH" "$task_type"
             ;;
         2)
-            setup_systemd_timer "$SCRIPT_PATH"
+            setup_systemd_timer "$SCRIPT_PATH" "$task_type"
             ;;
         *)
             print_message "Invalid choice. Exiting." "DANGER"
@@ -668,64 +681,79 @@ setup_automated_schedule() {
 }
 setup_cron_schedule() {
     local script_path="$1"
-    print_message "Setting up cron job..." "INFO"
+    local task_type="$2"
+    local job_name=""
+    if [ "$task_type" == "update" ]; then job_name="Auto-Update"; else job_name="Monitor"; fi
+    print_message "Setting up cron job for: $job_name" "INFO"
     echo
     if ! command -v crontab &>/dev/null; then
         print_message "Error: crontab command not found. Please install cron first." "DANGER"
         return 1
     fi
-    echo -e "${COLOR_CYAN}Select monitoring frequency:${COLOR_RESET}"
-    echo "  1) Every 6 hours"
-    echo "  2) Every 12 hours"
-    echo "  3) Once a day (at midnight)"
-    echo "  4) Twice a day (at 6 AM and 6 PM)"
-    echo "  5) Custom (you specify the cron expression)"
+    echo -e "${COLOR_CYAN}Select frequency for $job_name:${COLOR_RESET}"
+    if [ "$task_type" == "update" ]; then
+        echo "  1) Once a day (at 04:00 AM) [Recommended]"
+        echo "  2) Once a week (Sunday at 04:00 AM)"
+        echo "  3) Custom"
+    else
+        echo "  1) Every 6 hours"
+        echo "  2) Every 12 hours"
+        echo "  3) Once a day (at midnight)"
+        echo "  4) Twice a day (at 6 AM and 6 PM)"
+        echo "  5) Custom"
+    fi
     echo
-    read -rp "Enter your choice (1-5): " freq_choice
+    read -rp "Enter your choice: " freq_choice
     local cron_expression=""
     local description=""
-    case "$freq_choice" in
-        1)
-            cron_expression="0 */6 * * *"
-            description="every 6 hours"
-            ;;
-        2)
-            cron_expression="0 */12 * * *"
-            description="every 12 hours"
-            ;;
-        3)
-            cron_expression="0 0 * * *"
-            description="once a day at midnight"
-            ;;
-        4)
-            cron_expression="0 6,18 * * *"
-            description="twice a day at 6 AM and 6 PM"
-            ;;
-        5)
-            echo
-            echo -e "${COLOR_YELLOW}Cron expression format:${COLOR_RESET}"
-            echo "  ┌───────────── minute (0 - 59)"
-            echo "  │ ┌───────────── hour (0 - 23)"
-            echo "  │ │ ┌───────────── day of the month (1 - 31)"
-            echo "  │ │ │ ┌───────────── month (1 - 12)"
-            echo "  │ │ │ │ ┌───────────── day of the week (0 - 6) (Sunday to Saturday)"
-            echo "  │ │ │ │ │"
-            echo "  * * * * *"
-            echo
-            echo "Examples:"
-            echo "  0 */4 * * *     - Every 4 hours"
-            echo "  30 2 * * *      - At 2:30 AM every day"
-            echo "  0 9,17 * * 1-5  - At 9 AM and 5 PM on weekdays"
-            echo
-            read -rp "Enter your custom cron expression: " cron_expression
-            description="custom schedule ($cron_expression)"
-            ;;
-        *)
-            print_message "Invalid choice. Exiting." "DANGER"
-            return 1
-            ;;
-    esac
-    local cron_command="$cron_expression $script_path --summary >> $LOG_FILE 2>&1"
+    show_cron_guide() {
+        echo
+        echo -e "${COLOR_YELLOW}Cron expression format:${COLOR_RESET}"
+        echo "  ┌───────────── minute (0 - 59)"
+        echo "  │ ┌───────────── hour (0 - 23)"
+        echo "  │ │ ┌───────────── day of the month (1 - 31)"
+        echo "  │ │ │ ┌───────────── month (1 - 12)"
+        echo "  │ │ │ │ ┌───────────── day of the week (0 - 6) (Sunday to Saturday)"
+        echo "  │ │ │ │ │"
+        echo "  * * * * *"
+        echo
+        echo "Examples:"
+        echo "  0 */4 * * * - Every 4 hours"
+        echo "  30 2 * * * - At 2:30 AM every day"
+        echo "  0 9,17 * * 1-5  - At 9 AM and 5 PM on weekdays"
+        echo
+    }
+    if [ "$task_type" == "update" ]; then
+        case "$freq_choice" in
+            1) cron_expression="0 4 * * *"; description="daily at 04:00 AM" ;;
+            2) cron_expression="0 4 * * 0"; description="every Sunday at 04:00 AM" ;;
+            3)
+                show_cron_guide
+                read -rp "Enter your custom cron expression: " cron_expression
+                description="custom schedule ($cron_expression)"
+                ;;
+            *) print_message "Invalid choice." "DANGER"; return 1 ;;
+        esac
+    else
+        case "$freq_choice" in
+            1) cron_expression="0 */6 * * *"; description="every 6 hours" ;;
+            2) cron_expression="0 */12 * * *"; description="every 12 hours" ;;
+            3) cron_expression="0 0 * * *"; description="daily at midnight" ;;
+            4) cron_expression="0 6,18 * * *"; description="twice a day (6 AM/PM)" ;;
+            5)
+                show_cron_guide
+                read -rp "Enter your custom cron expression: " cron_expression
+                description="custom schedule ($cron_expression)"
+                ;;
+            *) print_message "Invalid choice." "DANGER"; return 1 ;;
+        esac
+    fi
+    local cron_command=""
+    if [ "$task_type" == "update" ]; then
+        cron_command="$cron_expression $script_path --auto-update > /dev/null 2>&1"
+    else
+        cron_command="$cron_expression $script_path --summary >> $LOG_FILE 2>&1"
+    fi
     echo
     print_message "The following cron job will be added:" "INFO"
     echo -e "  ${COLOR_YELLOW}$cron_command${COLOR_RESET}"
@@ -736,16 +764,18 @@ setup_cron_schedule() {
         print_message "Installation cancelled." "WARNING"
         return 0
     fi
+    local search_term="$script_path"
+    if [ "$task_type" == "update" ]; then search_term="--auto-update"; else search_term="--summary"; fi
     local existing_cron
-    existing_cron=$(crontab -l 2>/dev/null | grep -F "$script_path" || true)
+    existing_cron=$(crontab -l 2>/dev/null | grep -F "$script_path" | grep -F "$search_term" || true)
     if [ -n "$existing_cron" ]; then
-        print_message "Found existing cron job for this script:" "WARNING"
+        print_message "Found existing $job_name job:" "WARNING"
         echo -e "  ${COLOR_YELLOW}$existing_cron${COLOR_RESET}"
         echo
-        read -rp "Do you want to replace it? (y/n): " replace
+        read -rp "Replace it? (y/n): " replace
         if [[ "$replace" =~ ^[yY]$ ]]; then
-            (crontab -l 2>/dev/null | grep -vF "$script_path") | crontab - 2>/dev/null
-            print_message "Old cron job removed." "GOOD"
+            (crontab -l 2>/dev/null | grep -vF "$search_term") | crontab - 2>/dev/null
+            print_message "Old job removed." "GOOD"
         else
             print_message "Keeping existing cron job. No changes made." "INFO"
             return 0
@@ -753,7 +783,7 @@ setup_cron_schedule() {
     fi
     (crontab -l 2>/dev/null; echo "$cron_command") | crontab -
     if [ $? -eq 0 ]; then
-        print_message "Cron job installed successfully!" "GOOD"
+        print_message "$job_name cron job installed successfully!" "GOOD"
         echo
         print_message "Your container monitor will now run $description" "INFO"
         print_message "Logs will be written to: $LOG_FILE" "INFO"
@@ -767,7 +797,20 @@ setup_cron_schedule() {
 }
 setup_systemd_timer() {
     local script_path="$1"
-    print_message "Setting up systemd timer..." "INFO"
+    local task_type="$2"
+    local job_name=""
+    local service_suffix=""
+    local cmd_flag=""
+    if [ "$task_type" == "update" ]; then 
+        job_name="Auto-Updater"
+        service_suffix="-update"
+        cmd_flag="--auto-update"
+    else 
+        job_name="Monitor"
+        service_suffix=""
+        cmd_flag="--summary"
+    fi
+    print_message "Setting up systemd timer for: $job_name" "INFO"
     echo
     if ! command -v systemctl &>/dev/null; then
         print_message "Error: systemctl command not found. This system may not use systemd." "DANGER"
@@ -800,93 +843,96 @@ setup_systemd_timer() {
             return 1
             ;;
     esac
+
+    # Helper for the OnCalendar guide
+    show_timer_guide() {
+        echo
+        echo -e "${COLOR_YELLOW}Systemd timer OnCalendar format examples:${COLOR_RESET}"
+        echo "  hourly              - Every hour"
+        echo "  daily               - Every day at midnight"
+        echo "  weekly              - Every week on Monday at midnight"
+        echo "  *-*-* 00/2:00:00    - Every 2 hours"
+        echo "  *-*-* 08:00:00      - Every day at 8 AM"
+        echo "  Mon,Fri 09:00:00    - Mondays and Fridays at 9 AM"
+        echo
+        echo "For more info: https://www.freedesktop.org/software/systemd/man/systemd.time.html"
+        echo
+    }
     echo
-    echo -e "${COLOR_CYAN}Select monitoring frequency:${COLOR_RESET}"
-    echo "  1) Every 6 hours"
-    echo "  2) Every 12 hours"
-    echo "  3) Once a day (at midnight)"
-    echo "  4) Twice a day (at 6 AM and 6 PM)"
-    echo "  5) Every 4 hours"
-    echo "  6) Custom interval"
-    echo
-    read -rp "Enter your choice (1-6): " freq_choice
+    echo -e "${COLOR_CYAN}Select frequency for $job_name:${COLOR_RESET}"
+    local freq_choice
     local timer_oncalendar=""
     local description=""
-    case "$freq_choice" in
-        1)
-            timer_oncalendar="*-*-* 00/6:00:00"
-            description="every 6 hours"
-            ;;
-        2)
-            timer_oncalendar="*-*-* 00/12:00:00"
-            description="every 12 hours"
-            ;;
-        3)
-            timer_oncalendar="daily"
-            description="once a day at midnight"
-            ;;
-        4)
-            timer_oncalendar="*-*-* 06,18:00:00"
-            description="twice a day at 6 AM and 6 PM"
-            ;;
-        5)
-            timer_oncalendar="*-*-* 00/4:00:00"
-            description="every 4 hours"
-            ;;
-        6)
-            echo
-            echo -e "${COLOR_YELLOW}Systemd timer OnCalendar format examples:${COLOR_RESET}"
-            echo "  hourly              - Every hour"
-            echo "  daily               - Every day at midnight"
-            echo "  weekly              - Every week on Monday at midnight"
-            echo "  *-*-* 00/2:00:00    - Every 2 hours"
-            echo "  *-*-* 08:00:00      - Every day at 8 AM"
-            echo "  Mon,Fri 09:00:00    - Mondays and Fridays at 9 AM"
-            echo
-            echo "For more info: https://www.freedesktop.org/software/systemd/man/systemd.time.html"
-            echo
-            read -rp "Enter your custom OnCalendar value: " timer_oncalendar
-            description="custom schedule ($timer_oncalendar)"
-            ;;
-        *)
-            print_message "Invalid choice. Exiting." "DANGER"
-            return 1
-            ;;
-    esac
-    local service_name="container-monitor"
+    if [ "$task_type" == "update" ]; then
+        echo "  1) Once a day (at 04:00 AM) [Recommended]"
+        echo "  2) Custom"
+        echo
+        read -rp "Enter your choice (1 or 2): " freq_choice
+        case "$freq_choice" in
+            1) timer_oncalendar="*-*-* 04:00:00"; description="daily at 04:00 AM" ;;
+            2) 
+                show_timer_guide
+                read -rp "Enter your custom OnCalendar value: " timer_oncalendar
+                description="custom schedule ($timer_oncalendar)"
+                ;;
+            *) print_message "Invalid choice." "DANGER"; return 1 ;;
+        esac
+    else
+        echo "  1) Every 6 hours"
+        echo "  2) Every 12 hours"
+        echo "  3) Once a day (at midnight)"
+        echo "  4) Twice a day (at 6 AM and 6 PM)"
+        echo "  5) Every 4 hours"
+        echo "  6) Custom interval"
+        echo
+        read -rp "Enter your choice (1-6): " freq_choice
+        case "$freq_choice" in
+            1) timer_oncalendar="*-*-* 00/6:00:00"; description="every 6 hours" ;;
+            2) timer_oncalendar="*-*-* 00/12:00:00"; description="every 12 hours" ;;
+            3) timer_oncalendar="daily"; description="once a day at midnight" ;;
+            4) timer_oncalendar="*-*-* 06,18:00:00"; description="twice a day at 6 AM and 6 PM" ;;
+            5) timer_oncalendar="*-*-* 00/4:00:00"; description="every 4 hours" ;;
+            6)
+                show_timer_guide
+                read -rp "Enter your custom OnCalendar value: " timer_oncalendar
+                description="custom schedule ($timer_oncalendar)"
+                ;;
+            *) print_message "Invalid choice." "DANGER"; return 1 ;;
+        esac
+    fi
+    local service_name="container-monitor${service_suffix}"
     local service_file="${systemd_dir}/${service_name}.service"
     local timer_file="${systemd_dir}/${service_name}.timer"
     local service_content="[Unit]
-Description=Docker Container Monitor
+Description=Docker Container ${job_name}
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=$script_path --summary
+ExecStart=$script_path $cmd_flag
 StandardOutput=append:$LOG_FILE
-StandardError=append:$LOG_FILE
-
-[Install]
-WantedBy=multi-user.target"
+StandardError=append:$LOG_FILE"
 
     if [ "$use_user_service" = true ]; then
         service_content="[Unit]
-Description=Docker Container Monitor
+Description=Docker Container ${job_name}
 After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=$script_path --summary
+ExecStart=$script_path $cmd_flag
 StandardOutput=append:$LOG_FILE
 StandardError=append:$LOG_FILE
 
 [Install]
 WantedBy=default.target"
+    else
+        service_content+="\n\n[Install]\nWantedBy=multi-user.target"
     fi
 
     local timer_content="[Unit]
-Description=Docker Container Monitor Timer
+Description=Timer for Docker Container ${job_name}
 Requires=${service_name}.service
 
 [Timer]
@@ -923,11 +969,11 @@ WantedBy=timers.target"
         $systemctl_cmd disable ${service_name}.timer 2>/dev/null || true
     fi
     if [ "$use_user_service" = true ]; then
-        echo "$service_content" > "$service_file"
-        echo "$timer_content" > "$timer_file"
+        echo -e "$service_content" > "$service_file"
+        echo -e "$timer_content" > "$timer_file"
     else
-        echo "$service_content" | sudo tee "$service_file" > /dev/null
-        echo "$timer_content" | sudo tee "$timer_file" > /dev/null
+        echo -e "$service_content" | sudo tee "$service_file" > /dev/null
+        echo -e "$timer_content" | sudo tee "$timer_file" > /dev/null
     fi
 
     if [ $? -ne 0 ]; then
