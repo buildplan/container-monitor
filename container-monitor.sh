@@ -767,14 +767,14 @@ setup_cron_schedule() {
     local search_term="$script_path"
     if [ "$task_type" == "update" ]; then search_term="--auto-update"; else search_term="--summary"; fi
     local existing_cron
-    existing_cron=$(crontab -l 2>/dev/null | grep -F "$script_path" | grep -F "$search_term" || true)
+    existing_cron=$(crontab -l 2>/dev/null | grep -F "$script_path" | grep -F -- "$search_term" || true)
     if [ -n "$existing_cron" ]; then
         print_message "Found existing $job_name job:" "WARNING"
         echo -e "  ${COLOR_YELLOW}$existing_cron${COLOR_RESET}"
         echo
         read -rp "Replace it? (y/n): " replace
         if [[ "$replace" =~ ^[yY]$ ]]; then
-            (crontab -l 2>/dev/null | grep -vF "$search_term") | crontab - 2>/dev/null
+            (crontab -l 2>/dev/null | grep -vF -- "$search_term") | crontab - 2>/dev/null
             print_message "Old job removed." "GOOD"
         else
             print_message "Keeping existing cron job. No changes made." "INFO"
