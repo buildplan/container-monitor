@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.80.5 ---
+# --- v0.80.6 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.80.5"
+VERSION="v0.80.6"
 VERSION_DATE="2025-12-14"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -1518,14 +1518,14 @@ check_for_updates() {
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $summary_message" "WARNING" >&2
         echo "$summary_message"
-        return 1
+        return 100
     elif [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
         local summary_message="Update available: ${latest_stable_version}"
         local release_url; release_url=$(get_release_url "$lookup_name")
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Update available for '$image_name_no_tag'. Latest stable is ${latest_stable_version} (you have ${current_tag})." "WARNING" >&2
         echo "$summary_message"
-        return 1
+        return 100
     else
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image '$current_image_ref' is up-to-date." "GOOD" >&2; return 0
     fi
@@ -1805,7 +1805,7 @@ run_interactive_update_mode() {
     for container in "${all_containers[@]}"; do
         local current_image; current_image=$(docker inspect -f '{{.Config.Image}}' "$container" 2>/dev/null)
         local update_details; update_details=$(check_for_updates "$container" "$current_image" "$state_json")
-        if [ $? -ne 0 ]; then
+        if [ $? -eq 100 ]; then
             containers_with_updates+=("$container")
             container_update_details+=("$update_details")
         fi
@@ -2055,7 +2055,7 @@ run_auto_update_mode() {
         update_details=$(check_for_updates "$container" "$current_image" "$state_json" 2>&1 | tail -n 1)
         local update_status=$?
         FORCE_UPDATE_CHECK="$old_force_flag"
-        if [ $update_status -ne 0 ]; then
+        if [ $update_status -eq 100 ]; then
             print_message "Auto-updating '$container'..." "INFO"
             process_container_update "$container" "$update_details"
             if [ "$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)" == "running" ]; then
