@@ -100,6 +100,8 @@ general:
   log_file: "container-monitor.log"
   update_check_cache_hours: 6
   lock_timeout_seconds: 30
+  healthchecks_job_url: "" # e.g., "https://hc.mydomain.com/ping/YOUR-KEY-HERE"
+  healthchecks_fail_on: "" # Comma-separated list of issues to fail on:
 
 # Custom patterns for the log checker
 logs:
@@ -134,26 +136,37 @@ notifications:
 
 # Container-specific settings
 containers:
+  # Add the names of containers to monitor by default
   monitor_defaults:
-    - "portainer"
-    - "traefik"
+    - "dozzle-agent"
+    - "beszel-agent"
+    - "postgres"
+
+  # URLs for release notes, used for update checks
   release_urls:
-    portainer/portainer-ce: "https://github.com/portainer/portainer/releases"
     amir20/dozzle: "https://github.com/amir20/dozzle/releases"
+    henrygd/beszel: "https://github.com/henrygd/beszel/releases"
+    postgres: "https://www.postgresql.org/docs/release/"
 
   # (Optional)
   # If a container isn't listed here, it uses the 'default' strategy.
   update_strategies:
     postgres: "digest"
     grafana/grafana: "semver"
-    some-specific-app: "major-lock"
-
+    # some-specific-app: "major-lock"
 
   # Exclude specific containers from the update check
   exclude:
     updates:
       - my-local-app-1
       - my-backend-api
+
+auto_update:
+  # set this to true and add a separate cronjob for auto-updates
+  enabled: false
+  tags: ["latest", "stable", "main"]
+  include: ["beszel-agent", "dozzle-agent"]
+  exclude: ["postgres"]
 ```
 
 ### Environment Variables
