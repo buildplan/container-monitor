@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.80.7 ---
+# --- v0.81.0 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.80.7"
-VERSION_DATE="2025-12-14"
+VERSION="v0.81.0"
+VERSION_DATE="2026-01-02"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -131,6 +131,7 @@ NETWORK_ERROR_THRESHOLD="${NETWORK_ERROR_THRESHOLD:-$_SCRIPT_DEFAULT_NETWORK_ERR
 HOST_DISK_CHECK_FILESYSTEM="${HOST_DISK_CHECK_FILESYSTEM:-$_SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM}"
 NOTIFICATION_CHANNEL="${NOTIFICATION_CHANNEL:-$_SCRIPT_DEFAULT_NOTIFICATION_CHANNEL}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL}"
+GENERIC_WEBHOOK_URL="${GENERIC_WEBHOOK_URL:-}"
 NTFY_SERVER_URL="${NTFY_SERVER_URL:-$_SCRIPT_DEFAULT_NTFY_SERVER_URL}"
 NTFY_TOPIC="${NTFY_TOPIC:-$_SCRIPT_DEFAULT_NTFY_TOPIC}"
 NTFY_ACCESS_TOKEN="${NTFY_ACCESS_TOKEN:-$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN}"
@@ -218,6 +219,7 @@ load_configuration() {
     set_final_config "HOST_DISK_CHECK_FILESYSTEM"    ".host_system.disk_check_filesystem"    "$_SCRIPT_DEFAULT_HOST_DISK_CHECK_FILESYSTEM"
     set_final_config "NOTIFICATION_CHANNEL"          ".notifications.channel"                "$_SCRIPT_DEFAULT_NOTIFICATION_CHANNEL"
     set_final_config "DISCORD_WEBHOOK_URL"           ".notifications.discord.webhook_url"    "$_SCRIPT_DEFAULT_DISCORD_WEBHOOK_URL"
+    set_final_config "GENERIC_WEBHOOK_URL"           ".notifications.generic.webhook_url"    ""
     set_final_config "NTFY_SERVER_URL"               ".notifications.ntfy.server_url"        "$_SCRIPT_DEFAULT_NTFY_SERVER_URL"
     set_final_config "NTFY_TOPIC"                    ".notifications.ntfy.topic"             "$_SCRIPT_DEFAULT_NTFY_TOPIC"
     set_final_config "NTFY_ACCESS_TOKEN"             ".notifications.ntfy.access_token"      "$_SCRIPT_DEFAULT_NTFY_ACCESS_TOKEN"
@@ -241,8 +243,8 @@ load_configuration() {
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
         LOG_ERROR_PATTERNS=()
     fi
-    if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
-        print_message "Invalid notification_channel '$NOTIFICATION_CHANNEL' in config.yml. Valid values are: discord, ntfy, none. Disabling notifications." "WARNING"
+    if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "generic" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
+        print_message "Invalid notification_channel '$NOTIFICATION_CHANNEL'..." "WARNING"
         NOTIFICATION_CHANNEL="none"
     fi
     if [ -n "$NOTIFY_ON" ]; then
@@ -801,11 +803,11 @@ setup_systemd_timer() {
     local job_name=""
     local service_suffix=""
     local cmd_flag=""
-    if [ "$task_type" == "update" ]; then 
+    if [ "$task_type" == "update" ]; then
         job_name="Auto-Updater"
         service_suffix="-update"
         cmd_flag="--auto-update"
-    else 
+    else
         job_name="Monitor"
         service_suffix=""
         cmd_flag="--summary"
@@ -870,7 +872,7 @@ setup_systemd_timer() {
         read -rp "Enter your choice (1 or 2): " freq_choice
         case "$freq_choice" in
             1) timer_oncalendar="*-*-* 04:00:00"; description="daily at 04:00 AM" ;;
-            2) 
+            2)
                 show_timer_guide
                 read -rp "Enter your custom OnCalendar value: " timer_oncalendar
                 description="custom schedule ($timer_oncalendar)"
@@ -1129,12 +1131,26 @@ send_ntfy_notification() {
     curl_opts+=("-d" "$message")
     run_with_retry curl "${curl_opts[@]}" "$NTFY_SERVER_URL/$NTFY_TOPIC" > /dev/null
 }
+send_generic_notification() {
+    local message="$1"
+    local title="$2"
+    local json_payload
+    json_payload=$(jq -n --arg text "$title: $message" '{text: $text}')
+    if [ -n "${GENERIC_WEBHOOK_URL:-}" ]; then
+        run_with_retry curl -s -H "Content-Type: application/json" -X POST -d "$json_payload" "$GENERIC_WEBHOOK_URL" > /dev/null
+    else
+        print_message "Generic Webhook URL is missing." "WARNING"
+    fi
+}
 send_notification() {
     local message="$1"
     local title="$2"
     case "$NOTIFICATION_CHANNEL" in
         "discord") send_discord_notification "$message" "$title" ;;
-        "ntfy") send_ntfy_notification "$message" "$title" ;;
+        "ntfy")    send_ntfy_notification "$message" "$title" ;;
+        "generic") send_generic_notification "$message" "$title" ;;
+        "none"|"") ;;
+        *)         print_message "Unknown notification channel: '$NOTIFICATION_CHANNEL'." "DANGER" ;;
     esac
 }
 send_healthchecks_job_ping() {
@@ -1499,7 +1515,7 @@ check_for_updates() {
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
     get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
-    if [[ "$current_tag" =~ ^(latest|stable|rolling|main|master|nightly|edge)$ ]]; then
+    if [[ "$current_tag" =~ ^(latest|stable|release|rolling|main|master|nightly|edge)$ ]]; then
         strategy="digest"
     fi
     local latest_stable_version=""
@@ -1536,18 +1552,22 @@ check_for_updates() {
                 error_message="Error listing tags for '${skopeo_repo_ref}'. Details: $skopeo_output"
                 update_check_failed=true
             else
-                local tag_filter; local sort_cmd
-                sort_cmd=("sort" "-V")
-                case "$strategy" in
-                    "semver") tag_filter='^[v]?[0-9]+\.[0-9]+\.[0-9]+$';;
-                    "major-lock")
-                        local major_version="${current_tag%%.*}"; local variant=""
-                        if [[ "$current_tag" == *"-"* ]]; then variant="-${current_tag#*-}"; fi
-                        tag_filter="^${major_version}(\.[0-9]+)*${variant}$"
-                        ;;
-                    *) tag_filter='^[v]?[0-9\.]+$';;
-                esac
-                latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | grep -v -- '-.*' | "${sort_cmd[@]}" | tail -n 1)
+                local tag_filter
+                local sort_cmd=("sort" "-V")
+                if [[ "$current_tag" == *"-alpine"* ]]; then
+                    tag_filter='^[v]?[0-9\.]+-alpine$'
+                elif [[ "$current_tag" == *"-slim"* ]]; then
+                    tag_filter='^[v]?[0-9\.]+-slim$'
+                else
+                    tag_filter='^[v]?[0-9\.]+$'
+                fi
+                local potential_tags
+                potential_tags=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter")
+                if [[ "$tag_filter" == *"-alpine"* || "$tag_filter" == *"-slim"* ]]; then
+                     latest_stable_version=$(echo "$potential_tags" | "${sort_cmd[@]}" | tail -n 1)
+                else
+                     latest_stable_version=$(echo "$potential_tags" | grep -v -- '-.*' | "${sort_cmd[@]}" | tail -n 1)
+                fi
             fi
             ;;
     esac
@@ -2363,16 +2383,16 @@ perform_monitoring() {
                 rm -f "$LOCK_FILE"
             fi
         fi
-        local lock_start_time; lock_start_time=$(date +%s)
-        while ! ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; do
-            local current_time; current_time=$(date +%s)
-            if (( (current_time - lock_start_time) >= LOCK_TIMEOUT_SECONDS )); then
-                print_message "Could not acquire lock '$LOCK_FILE' for state update after $LOCK_TIMEOUT_SECONDS seconds. Another instance may be running." "DANGER"
-                exit 1
+        local lock_dir; lock_dir="${SCRIPT_DIR}/.monitor.lock"
+        while ! mkdir "$lock_dir" 2>/dev/null; do
+            if [ "$(find "$lock_dir" -mmin +10 2>/dev/null)" ]; then
+                echo "Removing stale lock directory..."
+                rmdir "$lock_dir"
             fi
             sleep 1
         done
-        trap 'rm -f "$LOCK_FILE"; rm -rf "$results_dir"' EXIT INT TERM
+        # shellcheck disable=SC2064
+        trap "rmdir '$lock_dir'; rm -rf '$results_dir'" EXIT INT TERM
         if [[ -n "$HEALTHCHECKS_JOB_URL" ]]; then
           send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "start"
         fi
