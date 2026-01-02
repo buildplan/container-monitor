@@ -1554,19 +1554,17 @@ check_for_updates() {
             else
                 local tag_filter
                 local sort_cmd=("sort" "-V")
-                if [[ "$current_tag" == *"-alpine"* ]]; then
-                    tag_filter='^[v]?[0-9\.]+-alpine$'
-                elif [[ "$current_tag" == *"-slim"* ]]; then
-                    tag_filter='^[v]?[0-9\.]+-slim$'
+                local suffix_part=""
+                if [[ "$current_tag" =~ ^(v?[0-9]+(\.[0-9]+)*)(.*)$ ]]; then
+                    suffix_part="${BASH_REMATCH[3]}"
+                fi
+                if [ -n "$suffix_part" ]; then
+                    local escaped_suffix; escaped_suffix="${suffix_part//./\\.}"
+                    tag_filter="^[v]?[0-9\.]+$escaped_suffix$"
+                    latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
                 else
                     tag_filter='^[v]?[0-9\.]+$'
-                fi
-                local potential_tags
-                potential_tags=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter")
-                if [[ "$tag_filter" == *"-alpine"* || "$tag_filter" == *"-slim"* ]]; then
-                     latest_stable_version=$(echo "$potential_tags" | "${sort_cmd[@]}" | tail -n 1)
-                else
-                     latest_stable_version=$(echo "$potential_tags" | grep -v -- '-.*' | "${sort_cmd[@]}" | tail -n 1)
+                    latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
                 fi
             fi
             ;;
