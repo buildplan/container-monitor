@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.81.2 ---
+# --- v0.81.3 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.81.2"
+VERSION="v0.81.3"
 VERSION_DATE="2026-01-02"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -1563,7 +1563,17 @@ check_for_updates() {
                     tag_filter="^[v]?[0-9\.]+$escaped_suffix$"
                     latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
                 else
-                    if [[ "$strategy" == "semver" ]]; then
+                    if [[ "$strategy" == "major-lock" ]]; then
+                        local major_version=""
+                        if [[ "$current_tag" =~ ^v?([0-9]+) ]]; then
+                            major_version="${BASH_REMATCH[1]}"
+                        fi
+                        if [ -n "$major_version" ]; then
+                            tag_filter="^[v]?${major_version}\.[0-9\.]+$"
+                        else
+                            tag_filter='^[v]?[0-9\.]+$'
+                        fi
+                    elif [[ "$strategy" == "semver" ]]; then
                         tag_filter='^[v]?[0-9]+\.[0-9]+(\.[0-9]+)*$'
                     else
                         tag_filter='^[v]?[0-9\.]+$'
