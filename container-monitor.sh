@@ -1515,7 +1515,7 @@ check_for_updates() {
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
     get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
-    if [[ "$current_tag" =~ ^(latest|stable|release|rolling|main|master|nightly|edge)$ ]]; then
+    if [[ "$current_tag" =~ ^(latest|stable|release|rolling|main|master|nightly|edge|lts)$ ]]; then
         strategy="digest"
     fi
     local latest_stable_version=""
