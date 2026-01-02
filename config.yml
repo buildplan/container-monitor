@@ -42,12 +42,19 @@ host_system:
   disk_check_filesystem: "/"
 
 notifications:
-  # Set channel to "discord", "ntfy", or "none"
+  # Set channel to "discord", "ntfy", "generic", or "none"
   channel: "none"
   # Specify which issues trigger notifications (comma-separated: Updates,Logs,Status,Restarts,Resources,Disk,Network)
   notify_on: "Updates,Logs"
+
   discord:
     webhook_url: "https://discord.com/api/webhooks/xxxxxxxx"
+
+  # Generic Webhook (Slack, Teams, Mattermost, n8n, etc.)
+  # Sends a simple JSON POST: {"text": "Title: Message"}
+  generic:
+    webhook_url: "" 
+
   ntfy:
     server_url: "https://ntfy.sh"
     topic: "your_ntfy_topic_here"
