@@ -124,9 +124,11 @@ thresholds:
 
 # Notifications settings
 notifications:
-  channel: "none" # Set to "discord", "ntfy", or "none"
+  channel: "none" # Set to "discord", "ntfy", "generic", or "none"
   notify_on: "Updates,Logs,Restarts,Status" # Comma-separated list of issues to alert on
   discord:
+    webhook_url: ""
+  generic:
     webhook_url: ""
   ntfy:
     server_url: "https://ntfy.sh"
