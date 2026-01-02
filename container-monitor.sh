@@ -1730,9 +1730,15 @@ pull_new_image() {
     local image_to_pull="$current_image_ref"
     if [[ ! "$update_details" == *"New build found"* ]]; then
         local image_name_no_tag="${current_image_ref%:*}"
-        local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
-        if [ -n "$new_version" ]; then
-            image_to_pull="${image_name_no_tag}:${new_version}"
+        local new_full_tag
+        new_full_tag=$(echo "$update_details" | sed -n 's/.*Latest stable is \([^ ]*\).*/\1/p')
+        if [ -n "$new_full_tag" ]; then
+             image_to_pull="${image_name_no_tag}:${new_full_tag}"
+        else
+            local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
+            if [ -n "$new_version" ]; then
+                image_to_pull="${image_name_no_tag}:${new_version}"
+            fi
         fi
     fi
     print_message "Pulling new image: $image_to_pull" "INFO"
