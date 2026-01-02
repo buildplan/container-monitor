@@ -1794,7 +1794,11 @@ process_container_update() {
         return
     fi
     local image_name_no_tag="${current_image_ref%:*}"
-    local new_version; new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
+    local new_version    
+    new_version=$(echo "$update_details" | sed -n 's/^Update available: \([^,]*\).*/\1/p')
+    if [ -z "$new_version" ]; then
+        new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
+    fi
     if [ -z "$new_version" ]; then
         print_message "Could not determine the new version for '$container_name'. Cannot proceed." "DANGER"
         return 1
