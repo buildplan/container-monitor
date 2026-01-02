@@ -1731,7 +1731,7 @@ pull_new_image() {
     if [[ ! "$update_details" == *"New build found"* ]]; then
         local image_name_no_tag="${current_image_ref%:*}"
         local new_full_tag
-        new_full_tag=$(echo "$update_details" | sed -n 's/.*Latest stable is \([^ ]*\).*/\1/p')
+        new_full_tag=$(echo "$update_details" | sed -n 's/^Update available: \([^,]*\).*/\1/p')
         if [ -n "$new_full_tag" ]; then
              image_to_pull="${image_name_no_tag}:${new_full_tag}"
         else
