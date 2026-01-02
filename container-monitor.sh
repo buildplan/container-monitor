@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.81.0 ---
+# --- v0.81.1 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.81.0"
+VERSION="v0.81.1"
 VERSION_DATE="2026-01-02"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -1792,7 +1792,7 @@ process_container_update() {
         return
     fi
     local image_name_no_tag="${current_image_ref%:*}"
-    local new_version    
+    local new_version
     new_version=$(echo "$update_details" | sed -n 's/^Update available: \([^,]*\).*/\1/p')
     if [ -z "$new_version" ]; then
         new_version=$(echo "$update_details" | grep -oE '[v]?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
@@ -2392,15 +2392,23 @@ perform_monitoring() {
             fi
         fi
         local lock_dir; lock_dir="${SCRIPT_DIR}/.monitor.lock"
+        local lock_attempts=0
+        local max_lock_attempts=10
         while ! mkdir "$lock_dir" 2>/dev/null; do
             if [ "$(find "$lock_dir" -mmin +10 2>/dev/null)" ]; then
                 echo "Removing stale lock directory..."
                 rmdir "$lock_dir"
             fi
+            if [ $lock_attempts -ge $max_lock_attempts ]; then
+                print_message "Could not acquire lock after ${max_lock_attempts}s. Check '$lock_dir'." "DANGER"
+                rm -rf "$results_dir"
+                exit 1
+            fi
             sleep 1
+            lock_attempts=$((lock_attempts + 1))
         done
         # shellcheck disable=SC2064
-        trap "rmdir '$lock_dir'; rm -rf '$results_dir'" EXIT INT TERM
+        trap "rmdir '$lock_dir'; rm -rf '$results_dir'" EXIT
         if [[ -n "$HEALTHCHECKS_JOB_URL" ]]; then
           send_healthchecks_job_ping "$HEALTHCHECKS_JOB_URL" "start"
         fi
