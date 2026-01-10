@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.81.3 ---
+# --- v0.81.4 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.81.3"
-VERSION_DATE="2026-01-02"
+VERSION="v0.81.4"
+VERSION_DATE="2026-01-10"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -2654,7 +2654,9 @@ ${fail_details}"
             .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
         ' <<< "$new_state_json")
         echo "$new_state_json" > "$STATE_FILE"
-        rm -f "$LOCK_FILE"
+        if [ -d "$lock_dir" ]; then
+            rmdir "$lock_dir"
+        fi
         rm -rf "$results_dir"
         trap - EXIT INT TERM
     else
