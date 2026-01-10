@@ -3,9 +3,14 @@ name: Test Script Execution
 on:
   push:
     branches:
+      - main
       - dev*
       - test*
-      - improve*
+      - improve*  
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read

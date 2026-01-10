@@ -203,14 +203,25 @@ else
   echo "Skipping --prune (flag not supported)"
 fi
 
-# 12) Interrupt handling (trap cleanup), excluding test artifacts and the harness log
+# 12) Interrupt handling (trap cleanup)
 echo -e "\n12) Interrupt handling"
 "$SCRIPT_TO_TEST" --summary --no-update >/dev/null 2>&1 &
-PID=$!; sleep 2
+PID=$!
+sleep 3
 if ps -p "$PID" >/dev/null 2>&1; then
-  kill -INT "$PID" || true; wait "$PID" || true; sleep 1
-
-  # Derive LOG_FILE basename for exclusion to avoid absolute -path mismatches
+  SCRIPT_DIR_ABS="$(cd "$(dirname "$SCRIPT_TO_TEST")" && pwd)"
+  LOCK_DIR_PATH="${SCRIPT_DIR_ABS}/.monitor.lock"
+  if [[ ! -d "$LOCK_DIR_PATH" ]]; then
+     echo "WARNING: Lock directory not found before kill signal. Script might have delayed start."
+  fi
+  kill -INT "$PID" || true
+  wait "$PID" || true
+  sleep 2
+  if [[ -d "$LOCK_DIR_PATH" ]]; then
+    fail "Trap failed: Lock directory '$LOCK_DIR_PATH' still exists after SIGINT"
+  else
+    pass "Trap cleaned up .monitor.lock directory"
+  fi
   LOG_BASE="$(basename "$LOG_FILE" 2>/dev/null || echo 'container-monitor-test.log')"
 
   RESIDUALS="$(find "$TEST_TMP" -mindepth 1 \
@@ -223,7 +234,7 @@ if ps -p "$PID" >/dev/null 2>&1; then
     -print -quit || true)"
 
   if [[ -n "$RESIDUALS" ]]; then
-    echo "Residual files (excluding test artifacts):"
+    echo "Residual files found in TMPDIR:"
     find "$TEST_TMP" -mindepth 1 \
       -not -path "$SAVE_LOGS_DIR" -not -path "$SAVE_LOGS_DIR/*" \
       -not -name 'save-logs.out' -not -name 'save-logs.err' \
@@ -231,12 +242,12 @@ if ps -p "$PID" >/dev/null 2>&1; then
       -not -name "$LOG_BASE" \
       -not -name '*_logs_*.log' \
       -not -name '*_logs_*.log.err' -ls || true
-    fail "Trap cleanup left residual files"
+    fail "Trap cleanup left residual files in TEMP dir"
   else
-    pass "Trap cleaned TMPDIR (excluding test artifacts)"
+    pass "Trap cleaned TMPDIR (results directory)"
   fi
 else
-  fail "Background process not running for interrupt test"
+  fail "Background process died before interrupt test could start"
 fi
 
 echo -e "\n${PASS_COLOR}=== Tests Complete ===${NC}"
