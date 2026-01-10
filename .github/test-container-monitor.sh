@@ -249,4 +249,28 @@ else
   fail "Background process died before interrupt test could start"
 fi
 
+# 13) --auto-update
+echo -e "\n13) --auto-update (Dry Run)"
+if echo "$HELP" | grep -q -- "--auto-update"; then
+  require_zero "--auto-update run" "$SCRIPT_TO_TEST" --auto-update --no-update
+else
+  echo "Skipping --auto-update (flag not supported)"
+fi
+
+# 14) State File Logic & JSON Integrity
+echo -e "\n14) State File Integrity"
+SCRIPT_DIR_ABS="$(cd "$(dirname "$SCRIPT_TO_TEST")" && pwd)"
+STATE_FILE="${SCRIPT_DIR_ABS}/.monitor_state.json"
+if [[ -f "$STATE_FILE" ]]; then
+  if jq -e . "$STATE_FILE" >/dev/null 2>&1; then
+    pass "State file exists and is valid JSON"
+  else
+    fail "State file exists but contains invalid JSON"
+  fi
+  rm -f "$STATE_FILE"
+  pass "Cleaned up .monitor_state.json"
+else
+  echo "WARNING: .monitor_state.json was not found. Did the script run successfully?"
+fi
+
 echo -e "\n${PASS_COLOR}=== Tests Complete ===${NC}"
