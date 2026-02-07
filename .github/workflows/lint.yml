@@ -5,6 +5,9 @@ on:
   pull_request:
     branches:
       - main
+      - dev*
+    paths:
+      - 'container-monitor.sh'
 
 permissions:
   contents: read
