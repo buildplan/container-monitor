@@ -6,7 +6,10 @@ on:
       - main
       - dev*
       - test*
-      - improve*  
+      - improve*
+    paths:
+      - '.github/workflows/test-execution.yml'
+      - 'container-monitor.sh'
   pull_request:
     branches:
       - main
