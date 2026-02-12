@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.81.4 ---
+# --- v0.81.5 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.81.4"
-VERSION_DATE="2026-01-10"
+VERSION="v0.81.5"
+VERSION_DATE="2026-02-12"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -506,7 +506,7 @@ check_and_install_dependencies() {
             return 1
         fi
         local yq_url="https://github.com/mikefarah/yq/releases/download/${tag_to_install}/yq_linux_${arch_to_install}"
-		if sudo wget "$yq_url" -O /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; then
+		if sudo wget --timeout=15 "$yq_url" -O /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; then
             print_message "yq installed/updated successfully to ${tag_to_install}." "GOOD"
             return 0
         else
