@@ -39,7 +39,7 @@ The script requires a few common command-line tools.
 - `skopeo`
 - `gawk`
 - `coreutils` (provides `timeout`)
-- `wget`
+- `curl`
 
 When you first run the script, it will check for these dependencies. If any are missing, it will offer to automatically install them for you. For complex dependencies like `docker`, it will guide you with instructions.
 
@@ -53,10 +53,10 @@ Download the main script and the YAML configuration file.
 
 ```bash
 # Download the main script
-wget https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/container-monitor.sh
+curl -LO https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/container-monitor.sh
 
 # Download the template configuration file
-wget https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/config.yml
+curl -LO https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/config.yml
 ```
 
 ### 2. Verify Script Integrity (Recommended)
@@ -65,7 +65,7 @@ To ensure the script is authentic, verify its SHA256 checksum.
 
 ```bash
 # Download the official checksum file
-wget https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/container-monitor.sh.sha256
+curl -LO https://raw.githubusercontent.com/buildplan/container-monitor/refs/heads/main/container-monitor.sh.sha256
 
 # Run the check (it should output: container-monitor.sh: OK)
 sha256sum -c container-monitor.sh.sha256
@@ -179,11 +179,11 @@ You can override any setting from the YAML file by exporting an environment vari
 
 | YAML Path | ENV Variable | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `general.log_lines_to_check`| `LOG_LINES_TO_CHECK`| `20` | Number of recent log lines to scan for errors. |
-| `general.log_file`| `LOG_FILE`| `container-monitor.log` | Path to the script's output log file. |
-| `general.update_check_cache_hours`| `UPDATE_CHECK_CACHE_HOURS`| `6` | How long to cache image update results. |
-| `general.lock_timeout_seconds`| `LOCK_TIMEOUT_SECONDS`| `10` | Seconds to wait for a lock file before exiting. |
-| `logs.log_clean_pattern`| `LOG_CLEAN_PATTERN`| `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
+| `general.log_lines_to_check` | `LOG_LINES_TO_CHECK` | `20` | Number of recent log lines to scan for errors. |
+| `general.log_file` | `LOG_FILE` | `container-monitor.log` | Path to the script's output log file. |
+| `general.update_check_cache_hours` | `UPDATE_CHECK_CACHE_HOURS` | `6` | How long to cache image update results. |
+| `general.lock_timeout_seconds` | `LOCK_TIMEOUT_SECONDS` | `10` | Seconds to wait for a lock file before exiting. |
+| `logs.log_clean_pattern` | `LOG_CLEAN_PATTERN` | `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
 | `general.healthchecks_job_url` | `HEALTHCHECKS_JOB_URL` | `(empty)` | The full URL for a Healthchecks.io job (e.g., `https://hc-ping.com/UUID-HERE`). |
 | `general.healthchecks_fail_on` | `HEALTHCHECKS_FAIL_ON` | `(empty)` | Comma-separated list of issues to trigger a `/fail` ping (e.g., `Status,Restarts`). If empty, pings success even if issues are found. |
 
@@ -191,30 +191,30 @@ You can override any setting from the YAML file by exporting an environment vari
 
 | YAML Path | ENV Variable | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `thresholds.cpu_warning` | `CPU_WARNING_THRESHOLD`| `80` | CPU usage % that triggers a warning. |
-| `thresholds.memory_warning`| `MEMORY_WARNING_THRESHOLD`| `80` | Memory usage % that triggers a warning. |
-| `thresholds.disk_space`| `DISK_SPACE_THRESHOLD`| `80` | Disk usage % for a container mount that triggers a warning. |
-| `thresholds.network_error`| `NETWORK_ERROR_THRESHOLD`| `10` | Network error/drop count that triggers a warning. |
-| `host_system.disk_check_filesystem`| `HOST_DISK_CHECK_FILESYSTEM`| `/` | The host filesystem to monitor for disk space. |
-| N/A | `CONTAINER_NAMES`| `(empty)` | Comma-separated list of containers to monitor. |
+| `thresholds.cpu_warning` | `CPU_WARNING_THRESHOLD` | `80` | CPU usage % that triggers a warning. |
+| `thresholds.memory_warning` | `MEMORY_WARNING_THRESHOLD` | `80` | Memory usage % that triggers a warning. |
+| `thresholds.disk_space` | `DISK_SPACE_THRESHOLD` | `80` | Disk usage % for a container mount that triggers a warning. |
+| `thresholds.network_error` | `NETWORK_ERROR_THRESHOLD` | `10` | Network error/drop count that triggers a warning. |
+| `host_system.disk_check_filesystem` | `HOST_DISK_CHECK_FILESYSTEM` | `/` | The host filesystem to monitor for disk space. |
+| N/A | `CONTAINER_NAMES` | `(empty)` | Comma-separated list of containers to monitor. |
 
 ### Notifications
 
 | YAML Path | ENV Variable | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `notifications.channel` | `NOTIFICATION_CHANNEL`| `none` | Notification channel: `discord`, `ntfy`, or `none`. |
-| `notifications.notify_on` | `NOTIFY_ON`| All issues | Comma-separated list of issue types to send alerts for. |
-| `notifications.discord.webhook_url`| `DISCORD_WEBHOOK_URL`| `(empty)` | The webhook URL for Discord notifications. |
-| `notifications.ntfy.server_url`| `NTFY_SERVER_URL`| `https://ntfy.sh` | The server URL for ntfy notifications. |
-| `notifications.ntfy.topic`| `NTFY_TOPIC`| `(empty)` | The topic to publish ntfy notifications to. |
+| `notifications.channel` | `NOTIFICATION_CHANNEL` | `none` | Notification channel: `discord`, `ntfy`, or `none`. |
+| `notifications.notify_on` | `NOTIFY_ON` | All issues | Comma-separated list of issue types to send alerts for. |
+| `notifications.discord.webhook_url` | `DISCORD_WEBHOOK_URL` | `(empty)` | The webhook URL for Discord notifications. |
+| `notifications.ntfy.server_url` | `NTFY_SERVER_URL` | `https://ntfy.sh` | The server URL for ntfy notifications. |
+| `notifications.ntfy.topic` | `NTFY_TOPIC` | `(empty)` | The topic to publish ntfy notifications to. |
 
 ### Authentication
 
 | YAML Path | ENV Variable | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `auth.docker_username` | `DOCKER_USERNAME`| `(empty)` | Username for a private Docker registry. |
-| `auth.docker_password` | `DOCKER_PASSWORD`| `(empty)` | Password for a private Docker registry. |
-| `auth.docker_config_path` | `DOCKER_CONFIG_PATH`| `~/.docker/config.json` | Path to Docker's `config.json` file for authentication. |
+| `auth.docker_username` | `DOCKER_USERNAME` | `(empty)` | Username for a private Docker registry. |
+| `auth.docker_password` | `DOCKER_PASSWORD` | `(empty)` | Password for a private Docker registry. |
+| `auth.docker_config_path` | `DOCKER_CONFIG_PATH` | `~/.docker/config.json` | Path to Docker's `config.json` file for authentication. |
 
 **Tip**: To find the names of your running containers, use `docker ps --format '{{.Names}}'`. You can add these names to the `monitor_defaults` list in `config.yml`.
 
