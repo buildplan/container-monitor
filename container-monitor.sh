@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.81.5 ---
+# --- v0.81.6 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.81.5"
+VERSION="v0.81.6"
 VERSION_DATE="2026-02-12"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -317,7 +317,7 @@ print_help() {
     printf '\n%bConfiguration & Notes:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
     printf '  %b- Config loaded as: defaults -> %bconfig.yml%b -> environment variables.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
     printf '  %b- To skip only image update checks, use the %bexclude%b section in %bconfig.yml%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
-    printf '  %b- Dependencies: %bdocker, jq, yq, skopeo, gawk, coreutils (timeout), wget%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
+    printf '  %b- Dependencies: %bdocker, jq, yq, skopeo, gawk, coreutils (timeout), curl%b.%b\n' "$COLOR_CYAN" "$COLOR_YELLOW" "$COLOR_CYAN" "$COLOR_RESET"
     printf '  %b- For automation (cron), avoid interactive flags: --pull, --update, --prune.%b\n' "$COLOR_CYAN" "$COLOR_RESET"
 
     printf '\n%bExamples:%b\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -391,7 +391,7 @@ check_and_install_dependencies() {
         [skopeo]=skopeo
         [awk]=gawk
         [timeout]=coreutils
-        [wget]=wget
+        [curl]=curl
     )
     print_message "Checking for required command-line tools..." "INFO"
     if ! command -v docker &>/dev/null; then
@@ -506,7 +506,7 @@ check_and_install_dependencies() {
             return 1
         fi
         local yq_url="https://github.com/mikefarah/yq/releases/download/${tag_to_install}/yq_linux_${arch_to_install}"
-		if sudo wget --timeout=15 "$yq_url" -O /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; then
+        if sudo curl -fsSL --connect-timeout 15 "$yq_url" -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; then
             print_message "yq installed/updated successfully to ${tag_to_install}." "GOOD"
             return 0
         else
@@ -583,7 +583,7 @@ run_setup_check() {
 
     # 1. Check for system packages (docker, jq, etc.)
     local missing_pkgs=()
-    declare -A deps=( [docker]=docker [jq]=jq [skopeo]=skopeo [awk]=gawk [timeout]=coreutils [wget]=wget )
+    declare -A deps=( [docker]=docker [jq]=jq [skopeo]=skopeo [awk]=gawk [timeout]=coreutils [curl]=curl )
     for cmd in "${!deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             missing_pkgs+=("${deps[$cmd]}")
@@ -1214,12 +1214,12 @@ self_update() {
     local temp_script; temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
     local temp_checksum; temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
     print_message "Downloading new script version..." "INFO"
-    if ! wget -q --timeout=15 "$SCRIPT_URL" -O "$temp_script"; then
+    if ! curl -fsSL --connect-timeout 15 "$SCRIPT_URL" -o "$temp_script"; then
         print_message "Failed to download the new script. Update aborted." "DANGER"
         exit 1
     fi
     print_message "Downloading checksum..." "INFO"
-    if ! wget -q --timeout=15 "$CHECKSUM_URL" -O "$temp_checksum"; then
+    if ! curl -fsSL --connect-timeout 15 "$CHECKSUM_URL" -o "$temp_checksum"; then
         print_message "Failed to download the checksum file. Update aborted." "DANGER"
         exit 1
     fi
