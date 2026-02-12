@@ -1219,7 +1219,7 @@ self_update() {
         exit 1
     fi
     print_message "Downloading checksum..." "INFO"
-    if ! curl -sL "$CHECKSUM_URL" -o "$temp_checksum"; then
+    if ! wget -q --timeout=15 "$CHECKSUM_URL" -O "$temp_checksum"; then
         print_message "Failed to download the checksum file. Update aborted." "DANGER"
         exit 1
     fi
