@@ -1214,7 +1214,7 @@ self_update() {
     local temp_script; temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
     local temp_checksum; temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
     print_message "Downloading new script version..." "INFO"
-    if ! curl -sL "$SCRIPT_URL" -o "$temp_script"; then
+    if ! wget -q --timeout=15 "$SCRIPT_URL" -O "$temp_script"; then
         print_message "Failed to download the new script. Update aborted." "DANGER"
         exit 1
     fi
