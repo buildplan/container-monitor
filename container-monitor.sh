@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.81.6 ---
+# --- v0.82.0 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.81.6"
-VERSION_DATE="2026-02-12"
+VERSION="v0.82.0"
+VERSION_DATE="2026-02-27"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1649,6 +1649,18 @@ check_logs() {
     local error_regex; error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]:-error|panic|fail|fatal}")
     error_regex="${error_regex%|}"
     local current_errors; current_errors=$(echo "$logs_to_process" | grep -i -E "$error_regex")
+
+	# Filter out ignored patterns for this specific container
+    if [ -n "$current_errors" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
+        local ignore_patterns=()
+        mapfile -t ignore_patterns < <(yq e ".logs.ignore_patterns.\"$container_name\"[]" "$SCRIPT_DIR/config.yml" 2>/dev/null)
+        if [ ${#ignore_patterns[@]} -gt 0 ]; then
+            local ignore_regex; ignore_regex=$(printf "%s|" "${ignore_patterns[@]}")
+            ignore_regex="${ignore_regex%|}"
+            current_errors=$(echo "$current_errors" | grep -v -i -E "$ignore_regex")
+        fi
+    fi
+
     local new_hash=""
     if [ -n "$current_errors" ]; then
         local cleaned_errors
