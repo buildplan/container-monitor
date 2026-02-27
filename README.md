@@ -110,6 +110,13 @@ logs:
     - "SEVERE"
     - "Traceback"
 
+  # Ignore specific log patterns
+  ignore_patterns:
+    my-pgdb:
+      - "database system is ready to accept connections"
+    dozzle-agent:
+      - "level=warning.*deprecated" # You can use standard regex here
+
 # Credentials for private registries (safer as ENV vars)
 auth:
   docker_username: ""
@@ -178,12 +185,13 @@ You can override any setting from the YAML file by exporting an environment vari
 ### General & Logging
 
 | YAML Path | ENV Variable | Default | Description |
-| :--- | :---: | :---: | :--- |
+| --- | --- | --- | --- |
 | `general.log_lines_to_check` | `LOG_LINES_TO_CHECK` | `20` | Number of recent log lines to scan for errors. |
 | `general.log_file` | `LOG_FILE` | `container-monitor.log` | Path to the script's output log file. |
 | `general.update_check_cache_hours` | `UPDATE_CHECK_CACHE_HOURS` | `6` | How long to cache image update results. |
 | `general.lock_timeout_seconds` | `LOCK_TIMEOUT_SECONDS` | `10` | Seconds to wait for a lock file before exiting. |
 | `logs.log_clean_pattern` | `LOG_CLEAN_PATTERN` | `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
+| `logs.ignore_patterns` | `N/A` | `(empty)` | Map of container names to a list of regex patterns to ignore in their specific logs. |
 | `general.healthchecks_job_url` | `HEALTHCHECKS_JOB_URL` | `(empty)` | The full URL for a Healthchecks.io job (e.g., `https://hc-ping.com/UUID-HERE`). |
 | `general.healthchecks_fail_on` | `HEALTHCHECKS_FAIL_ON` | `(empty)` | Comma-separated list of issues to trigger a `/fail` ping (e.g., `Status,Restarts`). If empty, pings success even if issues are found. |
 
