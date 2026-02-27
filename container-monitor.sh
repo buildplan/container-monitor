@@ -243,6 +243,7 @@ load_configuration() {
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
         LOG_ERROR_PATTERNS=()
     fi
+    export LOG_ERROR_PATTERNS_STR; LOG_ERROR_PATTERNS_STR=$(IFS='|'; echo "${LOG_ERROR_PATTERNS[*]}")
     if [[ "$NOTIFICATION_CHANNEL" != "discord" && "$NOTIFICATION_CHANNEL" != "ntfy" && "$NOTIFICATION_CHANNEL" != "generic" && "$NOTIFICATION_CHANNEL" != "none" ]]; then
         print_message "Invalid notification_channel '$NOTIFICATION_CHANNEL'..." "WARNING"
         NOTIFICATION_CHANNEL="none"
@@ -1630,7 +1631,7 @@ check_logs() {
         if [ $docker_exit_code -ne 0 ]; then
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${docker_exit_code}. See logs for details." "DANGER" >&2
         else
-        :
+            raw_logs="$raw_logs"$'\n'"$cli_stderr"
         fi
     fi
     if [ -z "$raw_logs" ]; then
@@ -1646,8 +1647,7 @@ check_logs() {
         print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} No new unique log entries since last check." "GOOD" >&2
         echo "$saved_state_obj" && return 0
     fi
-    local error_regex; error_regex=$(printf "%s|" "${LOG_ERROR_PATTERNS[@]:-error|panic|fail|fatal}")
-    error_regex="${error_regex%|}"
+    local error_regex="${LOG_ERROR_PATTERNS_STR:-error|panic|fail|fatal}"
     local current_errors; current_errors=$(echo "$logs_to_process" | grep -i -E "$error_regex")
 
 	# Filter out ignored patterns for this specific container
@@ -2447,7 +2447,8 @@ perform_monitoring() {
                    check_resource_usage check_disk_space check_network check_for_updates check_logs get_update_strategy
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
-               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR SUMMARY_ONLY_MODE
+               NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR SUMMARY_ONLY_MODE \
+               LOG_CLEAN_PATTERN LOG_ERROR_PATTERNS_STR
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
