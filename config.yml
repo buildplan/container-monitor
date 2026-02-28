@@ -21,6 +21,13 @@ logs:
   # This default handles Docker's --timestamps format. You can adapt it for other log drivers.
   log_clean_pattern: '^[^ ]+[[:space:]]+'
 
+  ignore_patterns:
+    my-pgdb:
+      - "database system is ready to accept connections"
+      - "incomplete startup packet"
+    dozzle-agent:
+      - "level=warning.*deprecated" # can use standard regex here
+
 # Credentials for private registries.
 # It is safer to provide these using environment variables:
 # export DOCKER_USERNAME="myuser"
