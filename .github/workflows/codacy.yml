@@ -33,11 +33,15 @@ jobs:
           gh-code-scanning-compat: true
           max-allowed-issues: 2147483647
 
-      - name: Sanitize SARIF for GitHub
+      - name: Check SARIF has results
+        id: sarif_check
         run: |
-          jq '(.runs |= unique_by(.tool.driver.name))' results.sarif > codacy_cleaned.sarif
+          COUNT=$(jq '[.runs[].results // [] | .[]] | length' results.sarif)
+          echo "result_count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "SARIF contains $COUNT result(s)"
 
       - name: Upload SARIF results file
+        if: steps.sarif_check.outputs.result_count != '0'
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: codacy_cleaned.sarif
+          sarif_file: results.sarif
