@@ -33,10 +33,21 @@ jobs:
           gh-code-scanning-compat: true
           max-allowed-issues: 2147483647
 
+      - name: Merge duplicate SARIF runs
+        run: |
+          jq '
+            .runs |= (
+              group_by(.tool.driver.name) |
+              map(
+                .[0] + {results: (map(.results // []) | add // [])}
+              )
+            )
+          ' results.sarif > results_merged.sarif
+
       - name: Check SARIF has results
         id: sarif_check
         run: |
-          COUNT=$(jq '[.runs[].results // [] | .[]] | length' results.sarif)
+          COUNT=$(jq '[.runs[].results // [] | .[]] | length' results_merged.sarif)
           echo "result_count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "SARIF contains $COUNT result(s)"
 
@@ -44,4 +55,4 @@ jobs:
         if: steps.sarif_check.outputs.result_count != '0'
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: results.sarif
+          sarif_file: results_merged.sarif
