@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.82.0 ---
+# --- v0.82.1 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.82.0"
-VERSION_DATE="2026-02-27"
+VERSION="v0.82.1"
+VERSION_DATE="2026-04-03"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1171,13 +1171,13 @@ send_healthchecks_job_ping() {
     *)     : ;;
   esac
   if [[ -n "$body" ]]; then
-    (curl -fsS --connect-timeout 3 -m 8 --retry 1 \
+    curl -fsS --connect-timeout 5 -m 10 --retry 2 \
       --data-raw "$body" "$endpoint" >/dev/null 2>&1 || \
-      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING") &
+      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING"
   else
-    (curl -fsS --connect-timeout 3 -m 8 --retry 1 \
+    curl -fsS --connect-timeout 5 -m 10 --retry 2 \
       "$endpoint" >/dev/null 2>&1 || \
-      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING") &
+      print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING"
   fi
 }
 self_update() {
@@ -1624,8 +1624,9 @@ check_logs() {
     docker_logs_cmd+=("$container_name")
     local raw_logs cli_stderr
     local tmp_err; tmp_err=$(mktemp)
-    raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err"); local docker_exit_code=$?
-    cli_stderr=$(<"$tmp_err")
+    raw_logs=$("${docker_logs_cmd[@]}" 2> "$tmp_err" | tr -d '\0')
+    local docker_exit_code; docker_exit_code=${PIPESTATUS[0]}
+    cli_stderr=$(tr -d '\0' < "$tmp_err")
     rm -f "$tmp_err"
     if [ -n "$cli_stderr" ]; then
         if [ $docker_exit_code -ne 0 ]; then
