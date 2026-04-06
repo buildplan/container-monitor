@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.82.1 ---
+# --- v0.82.2 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.82.1"
-VERSION_DATE="2026-04-03"
+VERSION="v0.82.2"
+VERSION_DATE="2026-04-06"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1555,13 +1555,19 @@ check_for_updates() {
             else
                 local tag_filter
                 local sort_cmd=("sort" "-V")
+                local prefix_part=""
                 local suffix_part=""
-                if [[ "$current_tag" =~ ^(v?[0-9]+(\.[0-9]+)*)(.*)$ ]]; then
-                    suffix_part="${BASH_REMATCH[3]}"
+                if [[ "$current_tag" =~ ^([^0-9]*)([0-9]+(\.[0-9]+)*)(.*)$ ]]; then
+                    prefix_part="${BASH_REMATCH[1]}"
+                    suffix_part="${BASH_REMATCH[4]}"
                 fi
-                if [ -n "$suffix_part" ]; then
-                    local escaped_suffix; escaped_suffix="${suffix_part//./\\.}"
-                    tag_filter="^[v]?[0-9\.]+$escaped_suffix$"
+                if [[ -n "$prefix_part" && "$prefix_part" != "v" ]] || [ -n "$suffix_part" ]; then
+                    local escaped_prefix="${prefix_part//./\\.}"
+                    local escaped_suffix="${suffix_part//./\\.}"
+                    if [ -z "$escaped_prefix" ] || [ "$escaped_prefix" == "v" ]; then
+                        escaped_prefix="[v]?"
+                    fi
+                    tag_filter="^${escaped_prefix}[0-9\.]+${escaped_suffix}$"
                     latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
                 else
                     if [[ "$strategy" == "major-lock" ]]; then
