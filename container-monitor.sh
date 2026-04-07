@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.82.2 ---
+# --- v0.82.3 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.82.2"
-VERSION_DATE="2026-04-06"
+VERSION="v0.82.3"
+VERSION_DATE="2026-04-07"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -537,7 +537,7 @@ check_and_install_dependencies() {
     else
         print_message "Checking for yq updates..." "INFO"
         local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
-        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w "%{url_effective}" "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+        local latest_yq_tag; latest_yq_tag=$(curl -s "https://api.github.com/repos/mikefarah/yq/releases/latest" | jq -r '.tag_name // empty')
         if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
             if [ -t 0 ]; then
                 local api_url="https://api.github.com/repos/mikefarah/yq/releases/tags/${latest_yq_tag}"
@@ -604,7 +604,7 @@ run_setup_check() {
         all_ok=false
     else
         local local_yq_version; local_yq_version=$(yq --version | awk '{print $NF}')
-        local latest_yq_tag; latest_yq_tag=$(curl -sL -o /dev/null -w "%{url_effective}" "https://github.com/mikefarah/yq/releases/latest" | xargs basename 2>/dev/null)
+        local latest_yq_tag; latest_yq_tag=$(curl -s "https://api.github.com/repos/mikefarah/yq/releases/latest" | jq -r '.tag_name // empty')
         if [[ -n "$latest_yq_tag" && "$local_yq_version" != "$latest_yq_tag" ]]; then
             print_message "❕ yq has an update available: ${latest_yq_tag} (you have ${local_yq_version})." "WARNING"
             print_message "  Run the script manually to get an update prompt." "INFO"
@@ -1529,7 +1529,7 @@ check_for_updates() {
                 error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
                 update_check_failed=true
             else
-                local remote_inspect_output; remote_inspect_output=$(skopeo "${skopeo_opts[@]}" inspect --no-tags "${skopeo_repo_ref}:${current_tag}" 2>&1)
+                local remote_inspect_output; remote_inspect_output=$(timeout 45 skopeo "${skopeo_opts[@]}" inspect --no-tags "${skopeo_repo_ref}:${current_tag}" 2>&1)
                 if [ $? -ne 0 ]; then
                     error_message="Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'. Details: $remote_inspect_output"
                     update_check_failed=true
@@ -1548,7 +1548,7 @@ check_for_updates() {
             fi
             ;;
         *)
-            local skopeo_output; skopeo_output=$(skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>&1)
+            local skopeo_output; skopeo_output=$(timeout 45 skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>&1)
             if [ $? -ne 0 ]; then
                 error_message="Error listing tags for '${skopeo_repo_ref}'. Details: $skopeo_output"
                 update_check_failed=true
