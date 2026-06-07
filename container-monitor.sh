@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.82.4 ---
+# --- v0.82.5 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,7 +56,7 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.82.4"
+VERSION="v0.82.5"
 VERSION_DATE="2026-06-07"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
@@ -1171,12 +1171,12 @@ send_healthchecks_job_ping() {
     *)     : ;;
   esac
   if [[ -n "$body" ]]; then
-    curl -fsS --connect-timeout 5 -m 10 --retry 2 \
-      --data-raw "$body" "$endpoint" >/dev/null 2>&1 || \
+    curl -fsS -m 10 --retry 5 -o /dev/null \
+      --data-raw "$body" "$endpoint" 2>/dev/null || \
       print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING"
   else
-    curl -fsS --connect-timeout 5 -m 10 --retry 2 \
-      "$endpoint" >/dev/null 2>&1 || \
+    curl -fsS -m 10 --retry 5 -o /dev/null \
+      "$endpoint" 2>/dev/null || \
       print_message "Healthchecks: job ping '$status' failed (curl)." "WARNING"
   fi
 }
