@@ -1988,7 +1988,7 @@ print_summary() {
     local -A seen_containers
     local unique_containers=()
     for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-        if ! [[ -v seen_containers[$container] ]]; then
+        if [[ -z "${seen_containers[$container]}" ]]; then
             unique_containers+=("$container")
             seen_containers["$container"]=1
         fi
@@ -2594,7 +2594,7 @@ ${fail_details}"
             local -A seen_containers_notif
             local unique_containers_notif=()
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-                if ! [[ -v seen_containers_notif[$container] ]]; then
+                if [[ -z "${seen_containers_notif[$container]}" ]]; then
                     unique_containers_notif+=("$container")
                     seen_containers_notif["$container"]=1
                 fi
