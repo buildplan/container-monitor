@@ -3,7 +3,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.82.3 ---
+# --- v0.82.4 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.82.3"
-VERSION_DATE="2026-04-07"
+VERSION="v0.82.4"
+VERSION_DATE="2026-06-07"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1461,11 +1461,22 @@ check_for_updates() {
             return 0
         fi
     done
-    if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "INFO" >&2; return 0; fi
+    if ! command -v skopeo &>/dev/null; then print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} skopeo not installed. Skipping." "WARNING" >&2; return 2; fi
     if [[ "$current_image_ref" == *@sha256:* || "$current_image_ref" =~ ^sha256: ]]; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Image for '$container_name' is pinned by digest. Skipping." "INFO" >&2; return 0
     fi
-    local local_inspect; local_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
+    local container_inspect; container_inspect=$(docker inspect "$container_name" 2>/dev/null)
+    local container_image_id; container_image_id=$(jq -r '.[0].Image // empty' <<< "$container_inspect" 2>/dev/null)
+    local tagged_inspect; tagged_inspect=$(docker inspect "$current_image_ref" 2>/dev/null)
+    local tagged_image_id; tagged_image_id=$(jq -r '.[0].Id // empty' <<< "$tagged_inspect" 2>/dev/null)
+
+    if [[ -n "$container_image_id" && -n "$tagged_image_id" && "$container_image_id" != "$tagged_image_id" ]]; then
+        print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Update available: Newer image already pulled locally (pending recreate)." "WARNING" >&2
+        echo "Update available (Pending recreate)"
+        return 100
+    fi
+
+    local local_inspect; local_inspect=$(docker inspect "${container_image_id:-$current_image_ref}" 2>/dev/null)
     if ! jq -e '.[0].RepoDigests and (.[0].RepoDigests | length) > 0' <<< "$local_inspect" >/dev/null 2>&1; then
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} Skipping '$container_name' (local or non-registry image)." "INFO" >&2
         return 0
@@ -1522,6 +1533,8 @@ check_for_updates() {
     local latest_stable_version=""
     local update_check_failed=false
     local error_message=""
+    local sort_cmd=("sort" "-V")
+    if ! echo -e "2\n1" | sort -V &>/dev/null; then sort_cmd=("sort" "-t." "-k1,1n" "-k2,2n" "-k3,3n"); fi
     case "$strategy" in
         "digest")
             local local_digest; local_digest=$(jq -r '(.[0].RepoDigests[]? | select(startswith("'"$registry_host/$image_path_for_skopeo"'@")) | split("@")[1]) // (.[0].RepoDigests[0]? | split("@")[1])' <<< "$local_inspect")
@@ -1554,7 +1567,6 @@ check_for_updates() {
                 update_check_failed=true
             else
                 local tag_filter
-                local sort_cmd=("sort" "-V")
                 local prefix_part=""
                 local suffix_part=""
                 if [[ "$current_tag" =~ ^([^0-9]*)([0-9]+(\.[0-9]+)*)(.*)$ ]]; then
@@ -1604,7 +1616,7 @@ check_for_updates() {
         print_message "  ${COLOR_BLUE}Update Check:${COLOR_RESET} $summary_message" "WARNING" >&2
         echo "$summary_message"
         return 100
-    elif [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "$latest_stable_version" "$current_tag" | sort -V | tail -n 1)" == "$latest_stable_version" ]]; then
+    elif [[ "v$current_tag" != "v$latest_stable_version" && "$current_tag" != "$latest_stable_version" ]] && [[ "$(printf '%s\n' "${latest_stable_version#v}" "${current_tag#v}" | "${sort_cmd[@]}" | tail -n 1)" == "${latest_stable_version#v}" ]]; then
         local summary_message="Update available: ${latest_stable_version}"
         local release_url; release_url=$(get_release_url "$lookup_name")
         if [ -n "$release_url" ]; then summary_message+=", Notes: $release_url"; fi
@@ -1976,7 +1988,7 @@ print_summary() {
     local -A seen_containers
     local unique_containers=()
     for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-        if ! [[ -v seen_containers[$container] ]]; then
+        if [[ -z "${seen_containers[$container]:-}" ]]; then
             unique_containers+=("$container")
             seen_containers["$container"]=1
         fi
@@ -2582,7 +2594,7 @@ ${fail_details}"
             local -A seen_containers_notif
             local unique_containers_notif=()
             for container in "${WARNING_OR_ERROR_CONTAINERS[@]}"; do
-                if ! [[ -v seen_containers_notif[$container] ]]; then
+                if [[ -z "${seen_containers_notif[$container]:-}" ]]; then
                     unique_containers_notif+=("$container")
                     seen_containers_notif["$container"]=1
                 fi
