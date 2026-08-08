@@ -406,8 +406,13 @@ check_and_install_dependencies() {
         aarch64|arm64) arch="arm64" ;;
         *) arch="unsupported" ;;
     esac
-    if [ -n "$OS_OVERRIDE" ]; then
-        os_type="$OS_OVERRIDE"
+    local local_os_override="${OS_OVERRIDE:-}"
+    if [ -z "$local_os_override" ] && [ -f "$SCRIPT_DIR/config.yml" ]; then
+        local_os_override=$(grep -E '^[[:space:]]*os_override:[[:space:]]*".*"' "$SCRIPT_DIR/config.yml" 2>/dev/null | cut -d '"' -f 2 || true)
+    fi
+
+    if [ -n "$local_os_override" ]; then
+        os_type="$local_os_override"
     else
         case "$(uname -s)" in
             Darwin*) os_type="darwin" ;;
