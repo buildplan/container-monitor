@@ -4,7 +4,7 @@ export LC_ALL=C
 set -uo pipefail
 
 
-# --- v0.83.0 ---
+# --- v0.83.1 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -86,7 +86,7 @@ if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4 )); then
 fi
 
 # --- Script & Update Configuration ---
-VERSION="v0.83.0"
+VERSION="v0.83.1"
 VERSION_DATE="2026-08-08"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
