@@ -33,10 +33,19 @@ logs:
 # Credentials for private registries.
 # It is safer to provide these using environment variables:
 # export DOCKER_USERNAME="myuser"
-# export DOCKER_PASSWORD="mypassword"
+# Credentials for registries
 auth:
+  # Global fallback credentials (applies to all registries if not overridden below)
   docker_username: ""
   docker_password: ""
+  # Per-registry credentials (recommended if using multiple registries)
+  registries:
+    # "forgejo.mydomain.com":
+    #   username: "myuser"
+    #   password: "mypassword"
+    # "ghcr.io":
+    #   username: "github_user"
+    #   password: "github_token"
   # Path to your Docker config.json for authentication.
   # Defaults to ~/.docker/config.json if not set.
   docker_config_path: "~/.docker/config.json"
@@ -62,7 +71,7 @@ notifications:
   # Generic Webhook (Slack, Teams, Mattermost, n8n, etc.)
   # Sends a simple JSON POST: {"text": "Title: Message"}
   generic:
-    webhook_url: "" 
+    webhook_url: ""
 
   ntfy:
     server_url: "https://ntfy.sh"

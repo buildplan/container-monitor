@@ -2,6 +2,34 @@
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
 export LC_ALL=C
 set -uo pipefail
+# This script strictly requires Bash 4.0+ (for declare -A, mapfile, etc.)
+if (( BASH_VERSINFO[0] < 4 )); then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        brew_bash=""
+        if [ -x "/opt/homebrew/bin/bash" ]; then brew_bash="/opt/homebrew/bin/bash"
+        elif [ -x "/usr/local/bin/bash" ]; then brew_bash="/usr/local/bin/bash"
+        fi
+
+        if [ -n "$brew_bash" ]; then
+            echo "[INFO] Automatically switching to modern Homebrew Bash..."
+            exec "$brew_bash" "$0" "$@"
+        else
+            echo "[DANGER] This script requires Bash 4.0 or newer."
+            echo "You are using macOS, which ships with Bash 3.2."
+            echo "Please run: brew install bash"
+            echo "Then run the script again."
+            exit 1
+        fi
+    else
+        echo "[DANGER] This script requires Bash 4.0 or newer."
+        exit 1
+    fi
+fi
+
+# Bash < 4.4 has a bug where expanding an empty array with set -u causes an unbound variable crash.
+if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4 )); then
+    set +u
+fi
 
 # --- v0.83.0 ---
 # Description:
@@ -181,7 +209,7 @@ rotate_log_if_needed() {
         local file_size_bytes file_size_mb
         file_size_bytes=$(wc -c < "$LOG_FILE" | tr -d ' ')
         file_size_mb=$((file_size_bytes / 1024 / 1024))
-        
+
         if [ "$file_size_mb" -ge "$LOG_MAX_SIZE_MB" ]; then
             cp "$LOG_FILE" "${LOG_FILE}.1" && true > "$LOG_FILE"
             print_message "Log file rotated. Old logs saved to ${LOG_FILE}.1" "INFO"
@@ -1555,7 +1583,14 @@ check_for_updates() {
         export DOCKER_CONFIG="${expanded_path%/*}"
     fi
     local skopeo_opts=()
-    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+    local reg_user="" reg_pass=""
+    if [ -f "$SCRIPT_DIR/config.yml" ]; then
+        reg_user=$(yq e ".auth.registries.\"$registry_host\".username // \"\"" "$SCRIPT_DIR/config.yml" 2>/dev/null)
+        reg_pass=$(yq e ".auth.registries.\"$registry_host\".password // \"\"" "$SCRIPT_DIR/config.yml" 2>/dev/null)
+    fi
+    if [ -n "$reg_user" ] && [ -n "$reg_pass" ]; then
+        skopeo_opts+=("--creds" "$reg_user:$reg_pass")
+    elif [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
         skopeo_opts+=("--creds" "$DOCKER_USERNAME:$DOCKER_PASSWORD")
     fi
     get_release_url() { yq e ".containers.release_urls.\"${1}\" // \"\"" "$SCRIPT_DIR/config.yml"; }
@@ -1781,7 +1816,7 @@ check_host_memory_usage() {
         local active_pages; active_pages=$(vm_stat | grep "Pages active:" | awk '{print $3}' | tr -d '.')
         local wired_pages; wired_pages=$(vm_stat | grep "Pages wired down:" | awk '{print $4}' | tr -d '.')
         local compressed_pages; compressed_pages=$(vm_stat | grep "Pages occupied by compressor:" | awk '{print $5}' | tr -d '.')
-        
+
         total_mem=$(sysctl -n hw.memsize | awk '{print int($1/1048576)}')
         used_mem=$(awk -v active="$active_pages" -v wired="$wired_pages" -v comp="$compressed_pages" -v psize="$page_size" 'BEGIN {printf "%.0f", (active + wired + comp) * psize / 1048576}')
         free_mem=$(awk -v free_p="$free_pages" -v psize="$page_size" 'BEGIN {printf "%.0f", free_p * psize / 1048576}')
