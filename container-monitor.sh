@@ -2,34 +2,7 @@
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
 export LC_ALL=C
 set -uo pipefail
-# This script strictly requires Bash 4.0+ (for declare -A, mapfile, etc.)
-if (( BASH_VERSINFO[0] < 4 )); then
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        brew_bash=""
-        if [ -x "/opt/homebrew/bin/bash" ]; then brew_bash="/opt/homebrew/bin/bash"
-        elif [ -x "/usr/local/bin/bash" ]; then brew_bash="/usr/local/bin/bash"
-        fi
 
-        if [ -n "$brew_bash" ]; then
-            echo "[INFO] Automatically switching to modern Homebrew Bash..."
-            exec "$brew_bash" "$0" "$@"
-        else
-            echo "[DANGER] This script requires Bash 4.0 or newer."
-            echo "You are using macOS, which ships with Bash 3.2."
-            echo "Please run: brew install bash"
-            echo "Then run the script again."
-            exit 1
-        fi
-    else
-        echo "[DANGER] This script requires Bash 4.0 or newer."
-        exit 1
-    fi
-fi
-
-# Bash < 4.4 has a bug where expanding an empty array with set -u causes an unbound variable crash.
-if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4 )); then
-    set +u
-fi
 
 # --- v0.83.0 ---
 # Description:
@@ -40,15 +13,15 @@ fi
 # Output is printed to the standard output with improved formatting and colors and logged to a file.
 #
 # Configuration:
-#   Configuration is primarily done via config.sh and environment variables.
-#   Environment variables override settings in config.sh.
+#   Configuration is primarily done via config.yml and environment variables.
+#   Environment variables override settings in config.yml.
 #   Script defaults are used if no other configuration is found.
 #
 # Environment Variables (can be set to customize script behavior):
 #   - LOG_LINES_TO_CHECK: Number of log lines to check.
 #   - CHECK_FREQUENCY_MINUTES: Frequency of checks in minutes (Note: Script is run by external scheduler).
 #   - LOG_FILE: Path to the log file.
-#   - CONTAINER_NAMES: Comma-separated list of container names to monitor. Overrides config.sh.
+#   - CONTAINER_NAMES: Comma-separated list of container names to monitor. Overrides config.yml.
 #   - CPU_WARNING_THRESHOLD: CPU usage percentage threshold for warnings.
 #   - MEMORY_WARNING_THRESHOLD: Memory usage percentage threshold for warnings.
 #   - DISK_SPACE_THRESHOLD: Disk space usage percentage threshold for warnings (for container mounts).
@@ -83,6 +56,35 @@ fi
 #   - bc or awk (awk is used in this script for float comparisons to reduce dependencies)
 #   - timeout (from coreutils, for docker exec commands)
 
+# This script strictly requires Bash 4.0+ (for declare -A, mapfile, etc.)
+if (( BASH_VERSINFO[0] < 4 )); then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        brew_bash=""
+        if [ -x "/opt/homebrew/bin/bash" ]; then brew_bash="/opt/homebrew/bin/bash"
+        elif [ -x "/usr/local/bin/bash" ]; then brew_bash="/usr/local/bin/bash"
+        fi
+
+        if [ -n "$brew_bash" ]; then
+            echo "[INFO] Automatically switching to modern Homebrew Bash..."
+            exec "$brew_bash" "$0" "$@"
+        else
+            echo "[DANGER] This script requires Bash 4.0 or newer."
+            echo "You are using macOS, which ships with Bash 3.2."
+            echo "Please run: brew install bash"
+            echo "Then run the script again."
+            exit 1
+        fi
+    else
+        echo "[DANGER] This script requires Bash 4.0 or newer."
+        exit 1
+    fi
+fi
+
+# Bash < 4.4 has a bug where expanding an empty array with set -u causes an unbound variable crash.
+if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4 )); then
+    set +u
+fi
+
 # --- Script & Update Configuration ---
 VERSION="v0.83.0"
 VERSION_DATE="2026-08-08"
@@ -111,7 +113,7 @@ fi
 # --- Global Flags ---
 SUMMARY_ONLY_MODE=false
 PRINT_MESSAGE_FORCE_STDOUT=false
-INTERACTIVE_UPDATE_MODE=false
+
 RECREATE_MODE=false
 UPDATE_SKIPPED=false
 FORCE_UPDATE_CHECK=false
@@ -678,7 +680,7 @@ run_setup_check() {
     fi
 
     # 3. Check for script update
-    local latest_version; latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+    local latest_version; latest_version=$(curl -sL "$SCRIPT_URL?t=$(date +%s)" | grep -m 1 "VERSION=" | cut -d'"' -f2)
     if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
         print_message "❕ This script has an update available: ${latest_version} (you have ${VERSION})." "WARNING"
         print_message "  Run the script manually to get an update prompt." "INFO"
@@ -848,8 +850,7 @@ setup_cron_schedule() {
             return 0
         fi
     fi
-    (crontab -l 2>/dev/null; echo "$cron_command") | crontab -
-    if [ $? -eq 0 ]; then
+    if (crontab -l 2>/dev/null; echo "$cron_command") | crontab -; then
         print_message "$job_name cron job installed successfully!" "GOOD"
         echo
         print_message "Your container monitor will now run $description" "INFO"
@@ -1276,18 +1277,17 @@ self_update() {
     local temp_script; temp_script="$temp_dir/$(basename "$SCRIPT_URL")"
     local temp_checksum; temp_checksum="$temp_dir/$(basename "$CHECKSUM_URL")"
     print_message "Downloading new script version..." "INFO"
-    if ! curl -fsSL --connect-timeout 15 "$SCRIPT_URL" -o "$temp_script"; then
+    if ! curl -fsSL --connect-timeout 15 "$SCRIPT_URL?t=$(date +%s)" -o "$temp_script"; then
         print_message "Failed to download the new script. Update aborted." "DANGER"
         exit 1
     fi
     print_message "Downloading checksum..." "INFO"
-    if ! curl -fsSL --connect-timeout 15 "$CHECKSUM_URL" -o "$temp_checksum"; then
+    if ! curl -fsSL --connect-timeout 15 "$CHECKSUM_URL?t=$(date +%s)" -o "$temp_checksum"; then
         print_message "Failed to download the checksum file. Update aborted." "DANGER"
         exit 1
     fi
     print_message "Verifying checksum..." "INFO"
-    (cd "$temp_dir" && if command -v sha256sum &>/dev/null; then sha256sum -c "$(basename "$CHECKSUM_URL")" --quiet; else shasum -a 256 -c "$(basename "$CHECKSUM_URL")" >/dev/null; fi)
-    if [ $? -ne 0 ]; then
+    if ! (cd "$temp_dir" && if command -v sha256sum &>/dev/null; then sha256sum -c "$(basename "$CHECKSUM_URL")" --quiet; else shasum -a 256 -c "$(basename "$CHECKSUM_URL")" >/dev/null; fi); then
         print_message "Checksum verification failed! The downloaded file may be corrupt. Update aborted." "DANGER"
         exit 1
     fi
@@ -1564,7 +1564,7 @@ check_for_updates() {
     local image_name_no_tag="$current_image_ref"
     if [[ "$current_image_ref" == *":"* ]]; then
         current_tag="${current_image_ref##*:}"
-        image_name_no_tag="${current_image_ref%:$current_tag}"
+        image_name_no_tag="${current_image_ref%:"$current_tag"}"
     fi
     local lookup_name; lookup_name=$(echo "$image_name_no_tag" | sed -e 's#^docker.io/##' -e 's#^library/##')
     local strategy; strategy=$(get_update_strategy "$lookup_name")
@@ -1609,8 +1609,8 @@ check_for_updates() {
                 error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
                 update_check_failed=true
             else
-                local remote_inspect_output; remote_inspect_output=$(timeout 45 skopeo --override-os linux inspect "${skopeo_opts[@]}" --no-tags "${skopeo_repo_ref}:${current_tag}" 2>&1)
-                if [ $? -ne 0 ]; then
+                local remote_inspect_output
+                if ! remote_inspect_output=$(timeout 45 skopeo --override-os linux inspect "${skopeo_opts[@]}" --no-tags "${skopeo_repo_ref}:${current_tag}" 2>&1); then
                     error_message="Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'. Details: $remote_inspect_output"
                     update_check_failed=true
                 else
@@ -1633,8 +1633,8 @@ check_for_updates() {
             fi
             ;;
         *)
-            local skopeo_output; skopeo_output=$(timeout 45 skopeo --override-os linux list-tags "${skopeo_opts[@]}" "$skopeo_repo_ref" 2>&1)
-            if [ $? -ne 0 ]; then
+            local skopeo_output
+            if ! skopeo_output=$(timeout 45 skopeo --override-os linux list-tags "${skopeo_opts[@]}" "$skopeo_repo_ref" 2>&1); then
                 error_message="Error listing tags for '${skopeo_repo_ref}'. Details: $skopeo_output"
                 update_check_failed=true
             else
@@ -1719,7 +1719,7 @@ check_logs() {
     cli_stderr=$(tr -d '\0' < "$tmp_err")
     rm -f "$tmp_err"
     if [ -n "$cli_stderr" ]; then
-        if [ $docker_exit_code -ne 0 ]; then
+        if [ "$docker_exit_code" -ne 0 ]; then
             print_message "  ${COLOR_BLUE}Log Check:${COLOR_RESET} Docker command failed for '$container_name' with exit code ${docker_exit_code}. See logs for details." "DANGER" >&2
         else
             raw_logs="$raw_logs"$'\n'"$cli_stderr"
@@ -2172,11 +2172,11 @@ perform_checks_for_container() {
         print_message "  ${COLOR_BLUE}Stats:${COLOR_RESET} Could not retrieve stats for '$container_actual_name'." "WARNING"
     fi
     local issue_tags=()
-    check_container_status "$container_actual_name" "$inspect_json" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Status"); fi
-    check_container_restarts "$container_actual_name" "$inspect_json" "$state_json_string"; if [ $? -ne 0 ]; then issue_tags+=("Restarts"); fi
-    check_resource_usage "$container_actual_name" "$cpu_percent" "$mem_percent"; if [ $? -ne 0 ]; then issue_tags+=("Resources"); fi
-    check_disk_space "$container_actual_name" "$inspect_json"; if [ $? -ne 0 ]; then issue_tags+=("Disk"); fi
-    check_network "$container_actual_name"; if [ $? -ne 0 ]; then issue_tags+=("Network"); fi
+    if ! check_container_status "$container_actual_name" "$inspect_json" "$cpu_percent" "$mem_percent"; then issue_tags+=("Status"); fi
+    if ! check_container_restarts "$container_actual_name" "$inspect_json" "$state_json_string"; then issue_tags+=("Restarts"); fi
+    if ! check_resource_usage "$container_actual_name" "$cpu_percent" "$mem_percent"; then issue_tags+=("Resources"); fi
+    if ! check_disk_space "$container_actual_name" "$inspect_json"; then issue_tags+=("Disk"); fi
+    if ! check_network "$container_actual_name"; then issue_tags+=("Network"); fi
     local current_image_ref_for_update; current_image_ref_for_update=$(jq -r '.[0].Config.Image' <<< "$inspect_json")
     local update_output; update_output=$(check_for_updates "$container_actual_name" "$current_image_ref_for_update" "$state_json_string" 2>&1)
     local update_exit_code=$?
@@ -2191,8 +2191,7 @@ perform_checks_for_container() {
           '{key: $key, image_ref: $img_ref, data: {message: $msg, exit_code: $code, timestamp: (now | floor)}}' > "$results_dir/$container_actual_name.update_cache"
     fi
     local new_log_state_json
-    new_log_state_json=$(check_logs "$container_actual_name" "$state_json_string")
-    if [ $? -ne 0 ]; then
+    if ! new_log_state_json=$(check_logs "$container_actual_name" "$state_json_string"); then
         issue_tags+=("Logs")
     fi
     echo "$new_log_state_json" > "$results_dir/$container_actual_name.log_state"
@@ -2353,7 +2352,7 @@ main() {
                 if [[ "$ACTION" != "monitor" ]]; then print_message "Error: Cannot combine actions like --update and --logs." "DANGER"; return 1; fi
                 ACTION="interactive-update"
                 if [[ "$1" == "--update" ]]; then RECREATE_MODE=true; fi
-                INTERACTIVE_UPDATE_MODE=true
+
                 shift
                 ;;
             --prune)
@@ -2422,7 +2421,7 @@ main() {
     if [[ "$force_update_check" == true || ("$run_update_check" == true && -t 1) ]]; then
         if [[ "$SCRIPT_URL" != *"your-username/your-repo"* ]]; then
             local latest_version
-            latest_version=$(curl -sL "$SCRIPT_URL" | grep -m 1 "VERSION=" | cut -d'"' -f2)
+            latest_version=$(curl -sL "$SCRIPT_URL?t=$(date +%s)" | grep -m 1 "VERSION=" | cut -d'"' -f2)
             if [[ -n "$latest_version" && "$VERSION" != "$latest_version" ]]; then
                 self_update "$latest_version"
             fi
