@@ -3,6 +3,8 @@
 general:
   log_lines_to_check: 40
   log_file: "container-monitor.log"
+  log_max_size_mb: 5 # Maximum size of the log file in megabytes before rotation (0 to disable)
+  os_override: "" # Force the script to use a specific OS (e.g. "linux", "darwin"). Leave blank for auto-discovery.
   update_check_cache_hours: 6 # check for new updates after 6 hours
   lock_timeout_seconds: 30 # configurable lock timeout
   healthchecks_job_url: "" # e.g., "https://hc.mydomain.com/ping/YOUR-KEY-HERE"

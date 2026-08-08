@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
 export LC_ALL=C
 set -uo pipefail
 
-# --- v0.82.5 ---
+# --- v0.83.0 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -56,8 +56,8 @@ set -uo pipefail
 #   - timeout (from coreutils, for docker exec commands)
 
 # --- Script & Update Configuration ---
-VERSION="v0.82.5"
-VERSION_DATE="2026-06-07"
+VERSION="v0.83.0"
+VERSION_DATE="2026-08-08"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -176,6 +176,18 @@ secure_config_file() {
     fi
     return 0
 }
+rotate_log_if_needed() {
+    if [[ "$LOG_MAX_SIZE_MB" =~ ^[0-9]+$ ]] && [ "$LOG_MAX_SIZE_MB" -gt 0 ] && [ -f "$LOG_FILE" ]; then
+        local file_size_bytes file_size_mb
+        file_size_bytes=$(wc -c < "$LOG_FILE" | tr -d ' ')
+        file_size_mb=$((file_size_bytes / 1024 / 1024))
+        
+        if [ "$file_size_mb" -ge "$LOG_MAX_SIZE_MB" ]; then
+            cp "$LOG_FILE" "${LOG_FILE}.1" && true > "$LOG_FILE"
+            print_message "Log file rotated. Old logs saved to ${LOG_FILE}.1" "INFO"
+        fi
+    fi
+}
 load_configuration() {
     _CONFIG_FILE_PATH="$SCRIPT_DIR/config.yml"
     secure_config_file "$_CONFIG_FILE_PATH"
@@ -211,6 +223,8 @@ load_configuration() {
     _SCRIPT_DEFAULT_LOG_CLEAN_PATTERN='^[^ ]+[[:space:]]+'
     set_final_config "LOG_LINES_TO_CHECK"            ".general.log_lines_to_check"           "$_SCRIPT_DEFAULT_LOG_LINES_TO_CHECK"
     set_final_config "LOG_FILE"                      ".general.log_file"                     "$_SCRIPT_DEFAULT_LOG_FILE"
+    set_final_config "LOG_MAX_SIZE_MB"               ".general.log_max_size_mb"              "5"
+    set_final_config "OS_OVERRIDE"                   ".general.os_override"                  ""
     set_final_config "LOG_CLEAN_PATTERN"             ".logs.log_clean_pattern"               "$_SCRIPT_DEFAULT_LOG_CLEAN_PATTERN"
     set_final_config "CPU_WARNING_THRESHOLD"         ".thresholds.cpu_warning"               "$_SCRIPT_DEFAULT_CPU_WARNING_THRESHOLD"
     set_final_config "MEMORY_WARNING_THRESHOLD"      ".thresholds.memory_warning"            "$_SCRIPT_DEFAULT_MEMORY_WARNING_THRESHOLD"
@@ -236,8 +250,8 @@ load_configuration() {
     mapfile -t AUTO_UPDATE_TAGS < <(yq e '.auto_update.tags[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
     if [ ${#AUTO_UPDATE_TAGS[@]} -eq 0 ]; then AUTO_UPDATE_TAGS=("latest" "stable" "main" "master" "nightly"); fi
 
-    mapfile -t AUTO_UPDATE_INCLUDE < <(yq e '.auto_update.include[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
-    mapfile -t AUTO_UPDATE_EXCLUDE < <(yq e '.auto_update.exclude[]' "$_CONFIG_FILE_PATH" 2>/dev/null)
+    mapfile -t AUTO_UPDATE_INCLUDE < <(yq e '.auto_update.include[]' "$_CONFIG_FILE_PATH" 2>/dev/null | sed '/^$/d')
+    mapfile -t AUTO_UPDATE_EXCLUDE < <(yq e '.auto_update.exclude[]' "$_CONFIG_FILE_PATH" 2>/dev/null | sed '/^$/d')
 
     if ! mapfile -t LOG_ERROR_PATTERNS < <(yq e '.logs.error_patterns[]' "$_CONFIG_FILE_PATH" 2>/dev/null); then
         print_message "Failed to parse log error patterns. Using defaults." "WARNING"
@@ -375,18 +389,31 @@ check_and_install_dependencies() {
     local manual_install_needed=false
     local pkg_manager=""
     local arch=""
+    local os_type="linux"
     if command -v apt-get &>/dev/null; then
         pkg_manager="apt"
     elif command -v dnf &>/dev/null; then
         pkg_manager="dnf"
     elif command -v yum &>/dev/null; then
         pkg_manager="yum"
+    elif command -v apk &>/dev/null; then
+        pkg_manager="apk"
+    elif command -v brew &>/dev/null; then
+        pkg_manager="brew"
     fi
     case "$(uname -m)" in
         x86_64) arch="amd64" ;;
-        aarch64) arch="arm64" ;;
+        aarch64|arm64) arch="arm64" ;;
         *) arch="unsupported" ;;
     esac
+    if [ -n "$OS_OVERRIDE" ]; then
+        os_type="$OS_OVERRIDE"
+    else
+        case "$(uname -s)" in
+            Darwin*) os_type="darwin" ;;
+            *) os_type="linux" ;;
+        esac
+    fi
     declare -A deps=(
         [jq]=jq
         [skopeo]=skopeo
@@ -469,10 +496,14 @@ check_and_install_dependencies() {
             if [ -n "$pkg_manager" ]; then
                 read -rp "Would you like to attempt to install them now? (y/n): " response
                 if [[ "$response" =~ ^[yY]$ ]]; then
-                    print_message "Attempting to install with 'sudo $pkg_manager'... You may be prompted for your password." "INFO"
+                    print_message "Attempting to install with '$pkg_manager'... You may be prompted for your password." "INFO"
                     local install_success=false
                     if [ "$pkg_manager" == "apt" ]; then
                        sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}" && install_success=true
+                    elif [ "$pkg_manager" == "brew" ]; then
+                       brew install "${missing_pkgs[@]}" && install_success=true
+                    elif [ "$pkg_manager" == "apk" ]; then
+                       sudo apk add "${missing_pkgs[@]}" && install_success=true
                     else
                        sudo "$pkg_manager" install -y "${missing_pkgs[@]}" && install_success=true
                     fi
@@ -506,7 +537,7 @@ check_and_install_dependencies() {
             print_message "Failed to get the latest yq version tag from GitHub." "DANGER"
             return 1
         fi
-        local yq_url="https://github.com/mikefarah/yq/releases/download/${tag_to_install}/yq_linux_${arch_to_install}"
+        local yq_url="https://github.com/mikefarah/yq/releases/download/${tag_to_install}/yq_${os_type}_${arch_to_install}"
         if sudo curl -fsSL --connect-timeout 15 "$yq_url" -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; then
             print_message "yq installed/updated successfully to ${tag_to_install}." "GOOD"
             return 0
@@ -971,30 +1002,27 @@ WantedBy=timers.target"
         $systemctl_cmd stop ${service_name}.timer 2>/dev/null || true
         $systemctl_cmd disable ${service_name}.timer 2>/dev/null || true
     fi
+    local creation_failed=false
     if [ "$use_user_service" = true ]; then
-        echo -e "$service_content" > "$service_file"
-        echo -e "$timer_content" > "$timer_file"
+        echo -e "$service_content" > "$service_file" || creation_failed=true
+        echo -e "$timer_content" > "$timer_file" || creation_failed=true
     else
-        echo -e "$service_content" | sudo tee "$service_file" > /dev/null
-        echo -e "$timer_content" | sudo tee "$timer_file" > /dev/null
+        echo -e "$service_content" | sudo tee "$service_file" > /dev/null || creation_failed=true
+        echo -e "$timer_content" | sudo tee "$timer_file" > /dev/null || creation_failed=true
     fi
 
-    if [ $? -ne 0 ]; then
+    if [ "$creation_failed" = true ]; then
         print_message "Failed to create systemd unit files." "DANGER"
         return 1
     fi
     print_message "Systemd unit files created successfully." "GOOD"
     print_message "Reloading systemd daemon..." "INFO"
-    $systemctl_cmd daemon-reload
-
-    if [ $? -ne 0 ]; then
+    if ! $systemctl_cmd daemon-reload; then
         print_message "Failed to reload systemd daemon." "DANGER"
         return 1
     fi
     print_message "Enabling and starting the timer..." "INFO"
-    $systemctl_cmd enable ${service_name}.timer
-    $systemctl_cmd start ${service_name}.timer
-    if [ $? -eq 0 ]; then
+    if $systemctl_cmd enable "${service_name}.timer" && $systemctl_cmd start "${service_name}.timer"; then
         print_message "Systemd timer installed and started successfully!" "GOOD"
         echo
         print_message "Your container monitor will now run $description" "INFO"
@@ -1032,7 +1060,7 @@ print_message() {
         "SUMMARY") color_code="$COLOR_MAGENTA" ;;
         *) color_code="$COLOR_RESET"; color_type="NONE" ;;
     esac
-    log_output_no_color=$(echo "$message" | sed -r "s/\x1B\[[0-9;]*[mK]//g")
+    log_output_no_color=$(echo "$message" | sed -E "s/\x1B\[[0-9;]*[mK]//g")
     local do_stdout_print=true
     if [ "$SUMMARY_ONLY_MODE" = "true" ]; then
         if [ "$PRINT_MESSAGE_FORCE_STDOUT" = "false" ]; then
@@ -1225,7 +1253,7 @@ self_update() {
         exit 1
     fi
     print_message "Verifying checksum..." "INFO"
-    (cd "$temp_dir" && sha256sum -c "$(basename "$CHECKSUM_URL")" --quiet)
+    (cd "$temp_dir" && if command -v sha256sum &>/dev/null; then sha256sum -c "$(basename "$CHECKSUM_URL")" --quiet; else shasum -a 256 -c "$(basename "$CHECKSUM_URL")" >/dev/null; fi)
     if [ $? -ne 0 ]; then
         print_message "Checksum verification failed! The downloaded file may be corrupt. Update aborted." "DANGER"
         exit 1
@@ -1380,7 +1408,6 @@ check_network() {
     local network_stats
     network_stats=$(timeout 5 docker exec "$container_name" cat /proc/net/dev 2>/dev/null)
     if [ -n "$network_stats" ]; then
-        local network_issue_reported_for_container=false
         while IFS= read -r line; do
             if [[ "$line" == *:* ]]; then
                 local interface data_part errors
@@ -1554,7 +1581,12 @@ check_for_updates() {
                         local remote_size; remote_size=$(jq -r '.Size // 0' <<< "$remote_inspect_output")
                         local size_delta=$((remote_size - local_size))
                         local human_readable_delta; human_readable_delta=$(awk -v delta="$size_delta" 'BEGIN { s="B K M G T P E Z Y"; split(s, a); sig=delta<0?"-":"+"; delta=delta<0?-delta:delta; while(delta >= 1024 && length(s) > 1) { delta /= 1024; s=substr(s, 3) } printf "%s%.1f%s", sig, delta, substr(s, 1, 1) }')
-                        local remote_date; remote_date=$(date -d "$remote_created" +"%Y-%m-%d %H:%M")
+                        local remote_date;
+                        if date --version &>/dev/null; then
+                            remote_date=$(date -d "$remote_created" +"%Y-%m-%d %H:%M")
+                        else
+                            remote_date=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$(echo "$remote_created" | cut -d. -f1)" +"%Y-%m-%d %H:%M" 2>/dev/null || echo "Unknown")
+                        fi
                         latest_stable_version="New build found (Created: $remote_date, Size Δ: ${human_readable_delta}B)"
                     fi
                 fi
@@ -1688,7 +1720,7 @@ check_logs() {
         else
             cleaned_errors="$current_errors"
         fi
-        new_hash=$(echo "$cleaned_errors" | sort | sha256sum | awk '{print $1}')
+        new_hash=$(echo "$cleaned_errors" | sort | if command -v sha256sum &>/dev/null; then sha256sum; else shasum -a 256; fi | awk '{print $1}')
     fi
     local new_last_timestamp; new_last_timestamp=$(echo "$raw_logs" | tail -n 1 | awk '{print $1}')
     if [ -z "$new_last_timestamp" ]; then
@@ -1735,17 +1767,26 @@ check_host_disk_usage() {
     echo "$output_string"
 }
 check_host_memory_usage() {
-    local mem_line total_mem used_mem free_mem perc_used output_string
+    local total_mem used_mem free_mem perc_used output_string
     if command -v free >/dev/null 2>&1; then
         read -r _ total_mem used_mem free_mem _ < <(free -m | awk 'NR==2')
-        if [[ "$total_mem" =~ ^[0-9]+$ && "$used_mem" =~ ^[0-9]+$ && "$total_mem" -gt 0 ]]; then
-            perc_used=$(awk -v used="$used_mem" -v total="$total_mem" 'BEGIN {printf "%.0f", (used * 100 / total)}')
-            output_string="  ${COLOR_BLUE}Host Memory Usage:${COLOR_RESET} ${COLOR_BLUE}Total:${COLOR_RESET} ${total_mem}MB, ${COLOR_BLUE}Used:${COLOR_RESET} ${used_mem}MB (${perc_used}%), ${COLOR_BLUE}Free:${COLOR_RESET} ${free_mem}MB"
-        else
-            output_string="  ${COLOR_BLUE}Host Memory Usage:${COLOR_RESET} Could not parse values from 'free -m'."
-        fi
+    elif command -v vm_stat >/dev/null 2>&1 && command -v sysctl >/dev/null 2>&1; then
+        local page_size; page_size=$(vm_stat | grep "page size of" | awk '{print $8}')
+        local free_pages; free_pages=$(vm_stat | grep "Pages free:" | awk '{print $3}' | tr -d '.')
+        local active_pages; active_pages=$(vm_stat | grep "Pages active:" | awk '{print $3}' | tr -d '.')
+        local wired_pages; wired_pages=$(vm_stat | grep "Pages wired down:" | awk '{print $4}' | tr -d '.')
+        local compressed_pages; compressed_pages=$(vm_stat | grep "Pages occupied by compressor:" | awk '{print $5}' | tr -d '.')
+        
+        total_mem=$(sysctl -n hw.memsize | awk '{print int($1/1048576)}')
+        used_mem=$(awk -v active="$active_pages" -v wired="$wired_pages" -v comp="$compressed_pages" -v psize="$page_size" 'BEGIN {printf "%.0f", (active + wired + comp) * psize / 1048576}')
+        free_mem=$(awk -v free_p="$free_pages" -v psize="$page_size" 'BEGIN {printf "%.0f", free_p * psize / 1048576}')
+    fi
+
+    if [[ "$total_mem" =~ ^[0-9]+$ && "$used_mem" =~ ^[0-9]+$ && "$total_mem" -gt 0 ]]; then
+        perc_used=$(awk -v used="$used_mem" -v total="$total_mem" 'BEGIN {printf "%.0f", (used * 100 / total)}')
+        output_string="  ${COLOR_BLUE}Host Memory Usage:${COLOR_RESET} ${COLOR_BLUE}Total:${COLOR_RESET} ${total_mem}MB, ${COLOR_BLUE}Used:${COLOR_RESET} ${used_mem}MB (${perc_used}%), ${COLOR_BLUE}Free:${COLOR_RESET} ${free_mem}MB"
     else
-        output_string="  ${COLOR_BLUE}Host Memory Usage:${COLOR_RESET} 'free' command not found."
+        output_string="  ${COLOR_BLUE}Host Memory Usage:${COLOR_RESET} Could not determine memory usage."
     fi
     echo "$output_string"
 }
@@ -2335,6 +2376,7 @@ main() {
 
     check_and_install_dependencies "${ORIGINAL_ARGS[@]}"
     load_configuration
+    rotate_log_if_needed
 
     # --- Self-Update Check ---
     if [[ "$force_update_check" == true || ("$run_update_check" == true && -t 1) ]]; then
@@ -2467,7 +2509,7 @@ perform_monitoring() {
         export COLOR_RESET COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_CYAN COLOR_BLUE COLOR_MAGENTA \
                LOG_LINES_TO_CHECK CPU_WARNING_THRESHOLD MEMORY_WARNING_THRESHOLD DISK_SPACE_THRESHOLD \
                NETWORK_ERROR_THRESHOLD UPDATE_CHECK_CACHE_HOURS FORCE_UPDATE_CHECK EXCLUDE_UPDATES_LIST_STR SUMMARY_ONLY_MODE \
-               LOG_CLEAN_PATTERN LOG_ERROR_PATTERNS_STR
+               LOG_CLEAN_PATTERN LOG_ERROR_PATTERNS_STR DOCKER_USERNAME DOCKER_PASSWORD DOCKER_CONFIG_PATH
         if [ "$SUMMARY_ONLY_MODE" = false ]; then
             echo "Starting asynchronous checks for ${#CONTAINERS_TO_CHECK[@]} containers..."
             local start_time; start_time=$(date +%s)
@@ -2685,7 +2727,7 @@ ${fail_details}"
             .restarts = (.restarts | with_entries(select(.key as $k | $valid_names | index($k)))) |
             .logs = (.logs | with_entries(select(.key as $k | $valid_names | index($k))))
         ' <<< "$new_state_json")
-        echo "$new_state_json" > "$STATE_FILE"
+        echo "$new_state_json" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
         if [ -d "$lock_dir" ]; then
             rmdir "$lock_dir"
         fi
