@@ -1609,7 +1609,7 @@ check_for_updates() {
                 error_message="Could not get local digest for '$current_image_ref'. Cannot check tag '$current_tag'."
                 update_check_failed=true
             else
-                local remote_inspect_output; remote_inspect_output=$(timeout 45 skopeo "${skopeo_opts[@]}" inspect --no-tags "${skopeo_repo_ref}:${current_tag}" 2>&1)
+                local remote_inspect_output; remote_inspect_output=$(timeout 45 skopeo --override-os linux inspect "${skopeo_opts[@]}" --no-tags "${skopeo_repo_ref}:${current_tag}" 2>&1)
                 if [ $? -ne 0 ]; then
                     error_message="Error inspecting remote image '${skopeo_repo_ref}:${current_tag}'. Details: $remote_inspect_output"
                     update_check_failed=true
@@ -1633,7 +1633,7 @@ check_for_updates() {
             fi
             ;;
         *)
-            local skopeo_output; skopeo_output=$(timeout 45 skopeo "${skopeo_opts[@]}" list-tags "$skopeo_repo_ref" 2>&1)
+            local skopeo_output; skopeo_output=$(timeout 45 skopeo --override-os linux list-tags "${skopeo_opts[@]}" "$skopeo_repo_ref" 2>&1)
             if [ $? -ne 0 ]; then
                 error_message="Error listing tags for '${skopeo_repo_ref}'. Details: $skopeo_output"
                 update_check_failed=true
