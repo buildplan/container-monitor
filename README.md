@@ -98,6 +98,8 @@ This is the central place for all settings. It is structured into sections for c
 general:
   log_lines_to_check: 40
   log_file: "container-monitor.log"
+  log_max_size_mb: 5
+  os_override: ""
   update_check_cache_hours: 6
   lock_timeout_seconds: 30
   healthchecks_job_url: "" # e.g., "https://hc.mydomain.com/ping/YOUR-KEY-HERE"
@@ -188,6 +190,8 @@ You can override any setting from the YAML file by exporting an environment vari
 | --- | --- | --- | --- |
 | `general.log_lines_to_check` | `LOG_LINES_TO_CHECK` | `20` | Number of recent log lines to scan for errors. |
 | `general.log_file` | `LOG_FILE` | `container-monitor.log` | Path to the script's output log file. |
+| `general.log_max_size_mb` | `LOG_MAX_SIZE_MB` | `5` | Maximum log size in MB before auto-rotating (0 to disable). |
+| `general.os_override` | `OS_OVERRIDE` | `(empty)` | Force a specific OS for dependency checks (e.g., `linux`, `darwin`). |
 | `general.update_check_cache_hours` | `UPDATE_CHECK_CACHE_HOURS` | `6` | How long to cache image update results. |
 | `general.lock_timeout_seconds` | `LOCK_TIMEOUT_SECONDS` | `10` | Seconds to wait for a lock file before exiting. |
 | `logs.log_clean_pattern` | `LOG_CLEAN_PATTERN` | `^[^ ]+[[:space:]]+` | Regex to strip variable data from logs before hashing. |
@@ -471,7 +475,7 @@ $ ./container-monitor.sh --auto-update
 
 ## Logging
 
-All script output, including detailed checks from non-summary runs, is logged to the file specified in `config.yml` (default: `container-monitor.log`). For long-term use, consider using `logrotate` to manage the log file size.
+All script output, including detailed checks from non-summary runs, is logged to the file specified in `config.yml` (default: `container-monitor.log`). The script automatically rotates this log file once it reaches the configured `log_max_size_mb` (default 5MB), keeping one backup copy (`.1`) to prevent excessive disk usage over time.
 
 ## State and Caching
 
