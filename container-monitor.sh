@@ -2780,7 +2780,7 @@ ${fail_details}"
         ' <<< "$new_state_json")
         echo "$new_state_json" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
         if [ -d "$lock_dir" ]; then
-            rmdir "$lock_dir"
+            rm -rf "$lock_dir"
         fi
         rm -rf "$results_dir"
         trap - EXIT INT TERM
