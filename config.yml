@@ -126,7 +126,8 @@ containers:
     # Use for: When you want to stay within a specific MAJOR version (e.g., '7.x.x')
     # and be notified of new MINOR or PATCH updates.
     # How it works: If your current tag is '7.1.5', it will look for any newer tags
-    # that start with '7.' (e.g., '7.2.0' or '7.1.6').
+    # that start with '7.' (e.g., '7.2.0' or '7.1.6'). Also preserves tag
+    # prefixes/suffixes (e.g., '18.6-alpine' stays on '18.x-alpine').
     # some-specific-app: "major-lock"
 
 
