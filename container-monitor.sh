@@ -4,7 +4,7 @@ export LC_ALL=C
 set -uo pipefail
 
 
-# --- v0.83.2 ---
+# --- v0.83.3 ---
 # Description:
 # This script monitors Docker containers on the system.
 # It checks container status, resource usage (CPU, Memory, Disk, Network),
@@ -86,8 +86,8 @@ if (( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4 )); then
 fi
 
 # --- Script & Update Configuration ---
-VERSION="v0.83.2"
-VERSION_DATE="2026-10-01"
+VERSION="v0.83.3"
+VERSION_DATE="2026-11-21"
 SCRIPT_URL="https://github.com/buildplan/container-monitor/raw/refs/heads/main/container-monitor.sh"
 CHECKSUM_URL="${SCRIPT_URL}.sha256" # sha256 hash check
 
@@ -1640,37 +1640,35 @@ check_for_updates() {
             else
                 local tag_filter
                 local prefix_part=""
+                local version_part=""
                 local suffix_part=""
                 if [[ "$current_tag" =~ ^([^0-9]*)([0-9]+(\.[0-9]+)*)(.*)$ ]]; then
                     prefix_part="${BASH_REMATCH[1]}"
+                    version_part="${BASH_REMATCH[2]}"
                     suffix_part="${BASH_REMATCH[4]}"
                 fi
-                if [[ -n "$prefix_part" && "$prefix_part" != "v" ]] || [ -n "$suffix_part" ]; then
-                    local escaped_prefix="${prefix_part//./\\.}"
-                    local escaped_suffix="${suffix_part//./\\.}"
-                    if [ -z "$escaped_prefix" ] || [ "$escaped_prefix" == "v" ]; then
-                        escaped_prefix="[v]?"
-                    fi
-                    tag_filter="^${escaped_prefix}[0-9\.]+${escaped_suffix}$"
-                    latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
-                else
-                    if [[ "$strategy" == "major-lock" ]]; then
-                        local major_version=""
-                        if [[ "$current_tag" =~ ^v?([0-9]+) ]]; then
-                            major_version="${BASH_REMATCH[1]}"
-                        fi
-                        if [ -n "$major_version" ]; then
-                            tag_filter="^[v]?${major_version}\.[0-9\.]+$"
-                        else
-                            tag_filter='^[v]?[0-9\.]+$'
-                        fi
-                    elif [[ "$strategy" == "semver" ]]; then
-                        tag_filter='^[v]?[0-9]+\.[0-9]+(\.[0-9]+)*$'
-                    else
-                        tag_filter='^[v]?[0-9\.]+$'
-                    fi
-                    latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
+
+                local escaped_prefix; escaped_prefix=$(printf '%s' "$prefix_part" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
+                local escaped_suffix; escaped_suffix=$(printf '%s' "$suffix_part" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
+                if [ -z "$escaped_prefix" ] || [ "$escaped_prefix" == "v" ]; then
+                    escaped_prefix="[v]?"
                 fi
+
+                local version_filter='[0-9\.]+'
+                if [[ "$strategy" == "major-lock" ]]; then
+                    local major_version=""
+                    if [[ "$version_part" =~ ^([0-9]+) ]]; then
+                        major_version="${BASH_REMATCH[1]}"
+                    fi
+                    if [ -n "$major_version" ]; then
+                        version_filter="${major_version}\.[0-9\.]+"
+                    fi
+                elif [[ "$strategy" == "semver" ]]; then
+                    version_filter='[0-9]+\.[0-9]+(\.[0-9]+)*'
+                fi
+
+                tag_filter="^${escaped_prefix}${version_filter}${escaped_suffix}$"
+                latest_stable_version=$(echo "$skopeo_output" | jq -r '.Tags[]' | grep -E "$tag_filter" | "${sort_cmd[@]}" | tail -n 1)
             fi
             ;;
     esac
